@@ -19,6 +19,7 @@ import { GEO, useBlocks, useProps, useScatter } from './kit'
 import SkyBody from './SkyBody'
 import { surfaceMaterials, tiledBox, tiledBoxOn, tiledPlane, tiledVault, useSurface } from './surfaces'
 import { ParkedJets } from './jets'
+import { LobbyBoard } from './LobbyBoard'
 import { OxygenStore } from './o2'
 import { addSquarePad } from './pads'
 import { SuitShop } from './suitShop'
@@ -436,6 +437,7 @@ export function EarthBase() {
       <ParkedJets place="earth" />
       <OxygenStore place="earth" />
       <SuitShop />
+      <LobbyBoard />
       <ContactShadows rects={SHADOW_RECTS} discs={treeShadows} />
       <RadarDish />
       <Blinkers lights={BLINKERS} period={1.5} duty={0.3} />

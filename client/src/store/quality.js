@@ -127,9 +127,9 @@ function readSaved() {
 export const DEFAULT_LEVEL = 'LOW'
 
 function detectLevel() {
-  if (typeof navigator === 'undefined') return DEFAULT_LEVEL
-  const cores = navigator.hardwareConcurrency || 0
-  return isMobileDevice() || cores <= 4 ? 'LOW' : 'MEDIUM'
+  // Everyone starts on LOW: it looks right and runs smoothly everywhere. A player who
+  // wants more picks MEDIUM or HIGH in Settings, and that choice is remembered.
+  return DEFAULT_LEVEL
 }
 
 const initialLevel = readSaved() || detectLevel()

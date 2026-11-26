@@ -141,6 +141,13 @@ const PAD_RAMP = { ...rect(-4, 4, LAUNCH_PAD.z + LAUNCH_PAD.half, LAUNCH_PAD.z +
 export const SUIT_SHOP = { x: 27, z: 35, w: 14, d: 9 }
 const SHOP_FRONT = SUIT_SHOP.z - SUIT_SHOP.d / 2
 
+/**
+ * The leaderboard in the lobby: a gantry of three big screens (Most Money, Most
+ * Deliveries, Top Playtime), north-west of the plaza, facing south towards the spawn.
+ * `w` is its width, `z` the line of its legs.
+ */
+export const LOBBY_BOARD = { x: -14, z: -12, w: 26 }
+
 const EARTH_LAYOUT = {
   spawn: { x: 0, z: 30 },
   spawnYaw: Math.PI,
@@ -178,6 +185,8 @@ const EARTH_LAYOUT = {
     // The Star Map console.
     rect(-0.9, 0.9, 11.6, 12.6),
     oxygenBooth(OXYGEN_STORES.earth),
+    // The leaderboard's legs.
+    rect(LOBBY_BOARD.x - LOBBY_BOARD.w / 2, LOBBY_BOARD.x + LOBBY_BOARD.w / 2, LOBBY_BOARD.z - 0.6, LOBBY_BOARD.z + 0.6),
   ],
   platforms: [
     { ...rect(LAUNCH_PAD.x - LAUNCH_PAD.half, LAUNCH_PAD.x + LAUNCH_PAD.half, LAUNCH_PAD.z - LAUNCH_PAD.half, LAUNCH_PAD.z + LAUNCH_PAD.half), height: LAUNCH_PAD.height },

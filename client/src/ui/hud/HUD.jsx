@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { breathable, destinationById, EARTH, LAUNCH_WARNING_MS, msToLaunch, OXYGEN_LOW, PLACE_NAMES, STATION, tankById } from '@shared/balance'
+import { breathable, destinationById, EARTH, LAUNCH_WARNING_MS, msToLaunch, OXYGEN_LOW, PLACE_NAMES, tankById } from '@shared/balance'
 import { formatClock, formatNumber } from '@shared/format'
-import { isUnlocked, payMultiplier } from '@shared/logic'
+import { payMultiplier } from '@shared/logic'
 
 import { sfx } from '../../audio/sfx'
 import { actions } from '../../net/actions'
@@ -120,22 +120,6 @@ function PackageCard() {
       )}
     </div>
   )
-}
-
-/** What to do next, worked out from where you are and what you carry. */
-function objectiveFor(profile, zone) {
-  const place = profile.location
-  const pkg = profile.package
-  // First things first: nobody goes to space without a suit.
-  if (profile.suit === 'none' && place === EARTH) return zone === 'suits' ? 'Take the FREE Rookie suit!' : 'Get your FREE space suit at the SUIT SHOP'
-  if (!pkg) return place === STATION ? 'Fly to a planet (or take the pod home) to find a Cargo Pad' : 'Step on the CARGO PAD to pick up a package'
-  if (pkg.to === place) return 'Step on the CARGO PAD to deliver!'
-  if (place === EARTH) return zone === 'boarding' ? 'Stay in the ring - you launch at zero!' : 'Board the ROCKET: stand in the green ring at liftoff'
-  if (place === STATION) {
-    if (pkg.to === EARTH) return 'Take the RE-ENTRY POD down to Earth'
-    return isUnlocked(profile, pkg.to) ? `Walk into the ${placeName(pkg.to).toUpperCase()} shuttle bay` : `Unlock ${placeName(pkg.to)} on the Star Map`
-  }
-  return 'Take the SHUTTLE BEACON back up to Halo Station'
 }
 
 /**
@@ -259,7 +243,6 @@ function GuideCard({ step }) {
 /** On Earth: the rocket countdown (urgent and beeping in its last seconds), and your next step. */
 function TopCenter() {
   const profile = useGame((s) => s.profile)
-  const zone = useGame((s) => s.zone)
   const travelling = useGame((s) => s.trip !== null)
   const guide = travelling ? null : guideStep(profile)
   const [left, setLeft] = useState(() => msToLaunch(serverNow()))
@@ -302,13 +285,8 @@ function TopCenter() {
       )}
       <OxygenMeter />
       <SuitHazard />
-      {guide ? (
-        <GuideCard step={guide} />
-      ) : (
-        <div className="text-center" style={{ fontSize: u(32), lineHeight: 1.15 }}>
-          <StrokeText stroke={u(7)} className="pp-text-wrap">{objectiveFor(profile, zone)}</StrokeText>
-        </div>
-      )}
+      {/* Only the first-time guide gives directions: once it's done, no hint line. */}
+      {guide && <GuideCard step={guide} />}
     </div>
   )
 }

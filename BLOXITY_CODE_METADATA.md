@@ -59,9 +59,13 @@ boards keep the column names the rows already had: `rebirths` holds deliveries,
 
 ## Screen ads
 
-`ads.declareScreens({ panel: {}, gameplay: {} })` once after init; the client then calls
-`ads.screen('panel')` while a modal panel is open and `ads.screen('gameplay')` otherwise.
-Gameplay banners are **off** (no `show: true`); turning them on is the developer's call.
+`ads.declareScreens({ panel: { show: true }, gameplay: { show: false } })` once after init.
+Ads belong to popups only: the client calls `ads.screen('panel')` while a popup the
+player opened (Store, Star Map, Suits, Leaderboards, Settings) is up and
+`ads.screen('gameplay')` otherwise, so nothing is ever shown while playing. A popup that
+opens by itself when the player walks onto a pad (Suit Shop, Oxygen Store, a locked bay)
+carries `panelData.auto` and still counts as `gameplay`: no ad can interrupt a delivery.
+The game never requests an interstitial or a break itself.
 
 ## Gems purchases
 

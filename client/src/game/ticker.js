@@ -58,7 +58,7 @@ export function startGameTicker() {
       if (isUnlocked(profile, dest)) ask(zone, () => actions.travel(dest, 'shuttle'))
       else if (entered && !game.panel) {
         sfx.error()
-        game.openPanel('map', { focus: dest })
+        game.openPanel('map', { focus: dest, auto: true })
       }
     } else if (zone === 'beacon') {
       ask(zone, () => actions.travel('station', 'shuttle'))
@@ -68,7 +68,8 @@ export function startGameTicker() {
       game.showToast('SAFE ROOM: air to breathe - your oxygen refills here', 'info')
     } else if (entered && (zone === 'suits' || zone === 'map' || zone === 'o2') && !game.panel) {
       sfx.click()
-      game.openPanel(zone === 'o2' ? 'oxygen' : zone)
+      // Opened by walking onto the pad, not by the player's choice: never an ad screen.
+      game.openPanel(zone === 'o2' ? 'oxygen' : zone, { auto: true })
     }
   }
 

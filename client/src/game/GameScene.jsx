@@ -185,6 +185,9 @@ export function GameScene({ onReady }) {
   // Rebuilt for a new graphics level, still compiling: a cover instead of an empty sky.
   const rebuilding = rebuild !== warmedRebuild
   const readySent = useRef(false)
+  // Behind a menu panel the scene is paced at 20 FPS on purpose (FrameLimiter): the
+  // monitor must not read that as a slow device and cut the resolution.
+  const panelOpen = useGame((s) => s.panel !== null)
 
   const handleWarmedUp = useCallback(() => {
     setWarmedUp(true)
@@ -312,7 +315,7 @@ export function GameScene({ onReady }) {
             resolution comes back (quality.recover). After a few flips back and forth it
             settles where it is rather than see-sawing. */}
         <FrameLimiter />
-        <PerformanceMonitor bounds={() => [45, 58]} flipflops={4} onDecline={handleDecline} onIncline={handleIncline} />
+        {!panelOpen && <PerformanceMonitor bounds={() => [45, 58]} flipflops={4} onDecline={handleDecline} onIncline={handleIncline} />}
 
         <Sky />
         <CraftEnvironment />

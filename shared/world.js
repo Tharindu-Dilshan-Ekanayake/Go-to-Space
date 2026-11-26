@@ -143,10 +143,11 @@ const SHOP_FRONT = SUIT_SHOP.z - SUIT_SHOP.d / 2
 
 /**
  * The leaderboard in the lobby: a gantry of three big screens (Most Money, Most
- * Deliveries, Top Playtime), north-west of the plaza, facing south towards the spawn.
- * `w` is its width, `z` the line of its legs.
+ * Deliveries, Top Playtime), against the plaza's north edge, west of the launch-pad
+ * apron, facing south towards the spawn - out of every walkway. `w` is its width, `z` the
+ * line of its legs.
  */
-export const LOBBY_BOARD = { x: -14, z: -12, w: 26 }
+export const LOBBY_BOARD = { x: -33, z: -27, w: 26 }
 
 const EARTH_LAYOUT = {
   spawn: { x: 0, z: 30 },

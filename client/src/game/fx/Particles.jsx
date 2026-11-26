@@ -31,12 +31,12 @@ const PALETTES = {
   confetti: ['#ff3b5c', '#ffd21f', '#4ef05a', '#2fc6ff', '#b15cff', '#ffffff'].map((c) => new Color(c)),
   gold: ['#ffe45c', '#ffc21f', '#ff9a12', '#ffffff'].map((c) => new Color(c)),
   power: ['#ffd84a', '#ffa21c', '#ffffff'].map((c) => new Color(c)),
-  /** Splinters and sawdust from a smashed wooden wall. */
-  wood: ['#c98f52', '#a8743f', '#e8c48a', '#8a5a32', '#fff3d6'].map((c) => new Color(c)),
+  /** Exhaust billowing round the rocket at lift-off. */
+  smoke: ['#f2f2f2', '#d9dadd', '#c4c6cb', '#ffd9a0'].map((c) => new Color(c)),
 }
 
 /**
- * Confetti bursts (level up, rebirth, landing, purchases). One InstancedMesh, a fixed
+ * Confetti bursts (deliveries, purchases) and lift-off smoke. One InstancedMesh, a fixed
  * pool of pieces, no allocation after start-up. Off entirely on presets without
  * particles: bursts queued there are simply dropped.
  */

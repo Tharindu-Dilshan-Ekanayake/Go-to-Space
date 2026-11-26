@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { tapSwing } from '../game/clickSwing'
 import { runtime } from '../game/runtime'
 import { useGame } from '../store/game'
-import Icon from './Icon'
 import { GRADIENTS } from './hud/style'
 
 /** Joystick travel radius, in CSS pixels. */
@@ -24,11 +22,9 @@ const roundButton = (size, background) => ({
 
 /**
  * On-screen controls for touch devices: a floating joystick that appears wherever the
- * left side of the screen is touched, a jump button, and a BAT button above it: tap it to
- * toss a ball up and smack it for Power (hold it to keep swinging, once every
- * CLICK_INTERVAL). At a batting station the HIT / SWING button takes over, and the bat
- * button steps aside. Everything else is walking onto things: a batting station, a cage,
- * a bat stand.
+ * left side of the screen is touched, and a jump button (hold it in the air on a jetpack
+ * suit to fly). Everything else is walking onto things: a Cargo Pad, a shuttle bay, the
+ * boarding ring.
  *
  * Writes straight into `runtime.input` and moves the knob through refs, so dragging
  * never re-renders React.
@@ -38,17 +34,10 @@ export function TouchControls() {
   const baseRef = useRef(null)
   const knobRef = useRef(null)
   const active = useRef({ id: null, x: 0, y: 0 })
-  // The slash button: gone at a throw spot (THROW is there), while a sword flies, and
-  // under a panel.
-  const batVisible = useGame((s) => !s.zone.atPlate && !s.roll && !s.rollResult && !s.panel)
   // Under a panel the whole set steps aside (display: none, not unmounted), so no stick or
   // button sits over the popup or catches a tap meant for it.
-  const panelOpen = useGame((s) => s.panel !== null)
-  const holdTimer = useRef(0)
-  const stopHold = () => {
-    clearInterval(holdTimer.current)
-    holdTimer.current = 0
-  }
+  // Mid-trip too: nothing to steer.
+  const panelOpen = useGame((s) => s.panel !== null || s.trip !== null)
 
   // A stick or button held as the panel opens lets go (its release would be hidden).
   useEffect(() => {
@@ -57,8 +46,6 @@ export function TouchControls() {
     runtime.input.joyX = 0
     runtime.input.joyY = 0
     runtime.input.jump = false
-    clearInterval(holdTimer.current)
-    holdTimer.current = 0
   }, [panelOpen])
 
   // A touchscreen laptop can start with a mouse; show the controls on first touch.
@@ -76,7 +63,6 @@ export function TouchControls() {
       runtime.input.joyX = 0
       runtime.input.joyY = 0
       runtime.input.jump = false
-      clearInterval(holdTimer.current)
     },
     [],
   )
@@ -138,8 +124,8 @@ export function TouchControls() {
       >
         <div
           ref={baseRef}
-          // Resting low in the corner, clear of the menu tiles above it (and, held
-          // upright, of the Health bar below it): .touch-joy-rest in index.css.
+          // Resting low in the corner, clear of the menu tiles above it and the package
+          // card below it: .touch-joy-rest in index.css.
           className="touch-joy-rest pointer-events-none absolute rounded-full border-4 border-white/70 bg-black/25"
           style={{
             width: RADIUS * 2,
@@ -155,28 +141,6 @@ export function TouchControls() {
           />
         </div>
       </div>
-
-      {batVisible && (
-        <button
-          type="button"
-          aria-label="Slash with your sword"
-          className="touch-bat pp-btn pp-chunky absolute z-20 flex touch-none items-center justify-center rounded-full text-white"
-          style={roundButton(84, GRADIENTS.goldButton)}
-          onPointerDown={(e) => {
-            e.preventDefault()
-            tapSwing()
-            stopHold()
-            // Held: keeps slashing (tapSwing paces itself).
-            holdTimer.current = setInterval(() => tapSwing(), 120)
-          }}
-          onPointerUp={stopHold}
-          onPointerCancel={stopHold}
-          onPointerLeave={stopHold}
-        >
-          <span className="pp-gloss" style={{ borderRadius: '42px 42px 24px 24px' }} />
-          <Icon name="bat" size={52} />
-        </button>
-      )}
 
       <button
         type="button"

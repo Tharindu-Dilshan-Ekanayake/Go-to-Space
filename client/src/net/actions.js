@@ -17,43 +17,21 @@ export function send(type, payload) {
 }
 
 export const actions = {
+  /** At a Cargo Pad: deliver what you carry if it's for here, and take the next package. */
+  cargo: () => send('cargo'),
+  dropPackage: () => send('dropPackage'),
   /**
-   * Swings at the pitch; only counts at home plate (the SWING button sends it).
-   * `accuracy` (0-1) is the swing meter when you swung; leave it out for Auto Swing.
+   * Sets off for `to`: `via` 'shuttle' (from a bay or the beacon), 'pod' (station down to
+   * Earth) or 'warp' (the Star Map, to anywhere you've been). The rocket isn't asked
+   * for: it leaves on schedule with whoever stands in the boarding ring.
    */
-  roll: (accuracy) => send('roll', Number.isFinite(accuracy) ? { accuracy } : undefined),
-  /** A click swing at a ball you tossed up yourself: one Power gain (rate-limited). */
-  clickSwing: () => send('clickSwing'),
-  enterPad: (pad) => send('enterPad', { pad }),
-  leavePad: () => send('leavePad'),
-  rebirth: () => send('rebirth'),
-  skipRebirth: () => send('skipRebirth'),
-  buyTire: (id) => send('buyTire', { id }),
-  equipTire: (id) => send('equipTire', { id }),
-  /** Buys ball `id` (the next in the Ball Shop) or equips one you own. */
-  buyBall: (id) => send('buyBall', { id }),
-  equipBall: (id) => send('equipBall', { id }),
-  /** Buys Health pack `index` (0-2) from the bar under the level. */
-  buyPack: (index) => send('buyPack', { index }),
-  hatch: (eggId, count = 1) => send('hatch', { eggId, count }),
-  openEggItem: (itemId) => send('openEggItem', { itemId }),
-  equipPet: (uid) => send('equipPet', { uid }),
-  unequipPet: (uid) => send('unequipPet', { uid }),
-  equipBestPets: () => send('equipBest'),
-  deletePet: (uid) => send('deletePet', { uid }),
-  usePotion: (itemId) => send('usePotion', { itemId }),
-  claimDaily: (day) => send('claimDaily', { day }),
-  claimPlaytime: (index) => send('claimPlaytime', { index }),
-  claimFreeReward: () => send('claimFreeReward'),
-  /** Claims today's finished quest `index` (0-2), or the bonus chest once all three are. */
-  claimQuest: (index) => send('claimQuest', { index }),
-  claimQuestBonus: () => send('claimQuestBonus'),
-  setSetting: (key, value) => send('setting', { key, value }),
-  portal: () => send('portal'),
-  /** Picks up Lava Land's Secret Star (the authority checks you're at it). */
-  findStar: () => send('findStar'),
-  /** Buys a shop item with Wins; see shop.js. */
-  purchase: (productId) => send('purchase', { productId }),
+  travel: (to, via) => send('travel', { to, via }),
+  unlock: (id) => send('unlock', { id }),
+  buySuit: (id) => send('buySuit', { id }),
+  equipSuit: (id) => send('equipSuit', { id }),
+  /** At an Oxygen Store: a bigger tank, or a refill. */
+  buyTank: (id) => send('buyTank', { id }),
+  refillOxygen: () => send('refillOxygen', {}),
   /** A rewarded ad Boxity says was watched; the server verifies the token. */
   adReward: (placement, rewardToken) => send('adReward', { placement, rewardToken }),
   /** Asks the server to apply any Gems purchases Boxity has confirmed. */

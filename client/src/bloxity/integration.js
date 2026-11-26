@@ -20,9 +20,9 @@ import { getBloxityState, useBloxityStore } from './store'
 
 /** Boards the game declares; scores come from the game server (or, offline, below). */
 export const LEADERBOARDS = [
-  { id: 'rebirths', label: 'Rebirths', order: 'desc', mode: 'best', format: 'number', reset: 'none' },
-  { id: 'wins', label: 'Total Wins', order: 'desc', mode: 'best', format: 'compact', reset: 'none' },
-  { id: 'distance', label: 'Longest Throw (m)', order: 'desc', mode: 'best', format: 'compact', reset: 'none' },
+  { id: 'deliveries', label: 'Deliveries', order: 'desc', mode: 'best', format: 'number', reset: 'none' },
+  { id: 'earned', label: 'Money Earned', order: 'desc', mode: 'best', format: 'compact', reset: 'none' },
+  { id: 'places', label: 'Places Visited', order: 'desc', mode: 'best', format: 'number', reset: 'none' },
   { id: 'playtime', label: 'Minutes Played', order: 'desc', mode: 'best', format: 'number', reset: 'none' },
 ]
 
@@ -144,10 +144,10 @@ function installSettings(sdk) {
 function onPlayerEvent(event, data) {
   switch (event) {
     case 'respawn_request':
-      // Not while your tire is rolling: you're frozen at the Roll Zone until it stops.
+      // Not mid-trip: you're frozen until you arrive.
       if (runtime.player.frozen) return
       stopLocalEmote()
-      respawn()
+      respawn(getGame().profile.location)
       runtime.camera.snap = true
       return
     case 'play_emote':
@@ -224,9 +224,9 @@ const OFFLINE_SUBMIT_MS = 15000
 function boardScores(profile) {
   const stats = profile?.stats || {}
   return {
-    rebirths: Math.floor(Number(profile?.rebirths) || 0),
-    wins: Math.floor(Number(stats.totalWins) || 0),
-    distance: Math.floor(Number(stats.bestDistance) || 0),
+    deliveries: Math.floor(Number(stats.deliveries) || 0),
+    earned: Math.floor(Number(stats.totalEarned) || 0),
+    places: Array.isArray(profile?.visited) ? profile.visited.length : 0,
     playtime: Math.floor((Number(stats.playtime) || 0) / 60),
   }
 }

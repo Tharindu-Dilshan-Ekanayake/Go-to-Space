@@ -1,14 +1,17 @@
 import { Vector3 } from 'three'
 
-import { setText } from '../roll/hudLink'
+/** Sets an element's text without a layout-thrashing replace when it's a lone text node. */
+function setText(el, text) {
+  const node = el.firstChild
+  if (node && node.nodeType === Node.TEXT_NODE && !node.nextSibling) node.nodeValue = text
+  else el.textContent = text
+}
 
 /**
- * Floating "+12 POWER" text: a fixed pool of DOM elements (max 10 alive), positioned
- * by projecting a world point each frame. When the pool is full the oldest popup is
- * recycled, so a fast pad can never pile up elements.
- *
- * While your tire rolls they're pinned to the screen instead (see spawnScattered),
- * scattered about it rather than chasing the tire round.
+ * Floating text ("+$40"): a fixed pool of DOM elements (max 10 alive), positioned by
+ * projecting a world point each frame. When the pool is full the oldest popup is
+ * recycled, so nothing can ever pile up elements. (spawnScattered pins one to the
+ * screen instead.)
  */
 
 export const POPUP_POOL_SIZE = 10

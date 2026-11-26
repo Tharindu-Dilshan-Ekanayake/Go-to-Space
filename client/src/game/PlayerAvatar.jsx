@@ -1,4 +1,4 @@
-import { useFrame, useLoader } from '@react-three/fiber'
+import { useFrame, useLoader, useThree } from '@react-three/fiber'
 import { forwardRef, useEffect, useMemo, useRef, useState } from 'react'
 import { Box3, MeshLambertMaterial, Vector3 } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
@@ -18,9 +18,10 @@ import { loadCharacterGLB, loadOBJ, loadPartGLB, loadTexture } from '../bloxity/
 import { getSDK, safeCall } from '../bloxity/sdk'
 import { useBloxity } from '../bloxity/BloxityContext'
 import { getEmoteClip, updateLocalEmote } from '../bloxity/emotes'
+import { withHiddenShown } from './linkPrograms'
+import { createSuitSkin, disposeSuitSkin, updateSuitSkin } from './suitSkin'
 import { shareLook } from '../net/connection'
-import { getGame } from '../store/game'
-import { createSwordMesh, disposeSwordMesh } from './swords'
+import { createSuitGear, yourGear } from './suitGear'
 import {
   animateRig,
   applyPart,
@@ -80,18 +81,23 @@ function fallbackMotion(delta) {
  *   own units: Bloxity authors the rig ~6.4 units tall with the feet at y=0, far bigger
  *   than the game's metric scale, so the model is measured and rescaled. `handRef` is
  *   an object beside the avatar that gets moved onto the right palm every frame, for
- *   anything held. `onStep` reports loading progress. `batId`, if given, is asked every
- *   frame which sword (shared/balance.js TIRES id) this player carries: it's drawn where
- *   the pose puts it (playerPose `bat`) - across their back, or in their hands.
+ *   anything held. `onStep` reports loading progress. `gear`, if given, is asked every
+ *   frame for `[suitId, carrying]`: the space suit this player wears (shared/balance.js
+ *   SUITS id) and whether a package is strapped to it (suitGear.js).
  */
 export const BloxityAvatar = forwardRef(function BloxityAvatar(
-  { equipped, proportions, onReady, onStep, targetHeight = 1.8, motionRef, handRef, emoteSource, batId, local = false, ...props },
+  { equipped, proportions, onReady, onStep, targetHeight = 1.8, motionRef, handRef, emoteSource, gear, local = false, ...props },
   ref,
 ) {
   // three's own GLTFLoader (the one the cosmetics use too), not drei's useGLTF, which
   // would bundle a second loader plus Draco/Meshopt/KTX2 decoders this GLB never needs.
   const { scene: baseScene } = useLoader(GLTFLoader, baseBodyUrl())
   const [assembled, setAssembled] = useState(false)
+  const gl = useThree((st) => st.gl)
+  const camera = useThree((st) => st.camera)
+  const scene = useThree((st) => st.scene)
+  /** The suit's fabric over the body (suitSkin.js), one per body mesh; remade with it. */
+  const skinsRef = useRef([])
   /** The merged body currently shown; replaced on every re-assembly. */
   const bodyRef = useRef(null)
   /** Their own uploaded character, once loaded: { info, scene }; null = player.glb. */
@@ -194,6 +200,26 @@ export const BloxityAvatar = forwardRef(function BloxityAvatar(
     }
     const accessoryMatrix = custom ? characterAccessoryMatrix() : null
 
+    // Dressed, the body's materials are new to the renderer. Drawn straight away they'd
+    // be compiled in the middle of a frame - a freeze of a second or more on many GPUs.
+    // So build their shaders first, in the background (in parallel where the driver
+    // can), with the character hidden for that moment, then show it.
+    const settle = () => {
+      if (cancelled) return
+      // The suit's fabric over whatever the body ended up as (hidden until a suit is worn).
+      for (const skin of skinsRef.current) disposeSuitSkin(skin)
+      const bodies = bodyRef.current ? [bodyRef.current] : rig.skinnedMeshes.filter((m) => m.visible)
+      skinsRef.current = bodies.map((body) => createSuitSkin(body))
+      character.visible = false
+      Promise.resolve()
+        .then(() => withHiddenShown(character, () => gl.compileAsync(character, camera, scene)))
+        .catch(() => null)
+        .finally(() => {
+          character.visible = true
+          if (!cancelled) setAssembled(true)
+        })
+    }
+
     Promise.all(jobs)
       .then((results) => {
         if (cancelled) return
@@ -229,7 +255,7 @@ export const BloxityAvatar = forwardRef(function BloxityAvatar(
         // One draw call for the body: merge the assembled parts. (A custom character
         // is drawn as it comes.)
         if (custom) {
-          setAssembled(true)
+          settle()
           return
         }
         try {
@@ -239,11 +265,11 @@ export const BloxityAvatar = forwardRef(function BloxityAvatar(
           console.warn('[bloxity] could not merge the body; drawing its parts', err)
           for (const mesh of rig.skinnedMeshes) mesh.visible = true
         }
-        setAssembled(true)
+        settle()
       })
       .catch((err) => {
         console.warn('[bloxity] avatar assembly failed; showing base body', err)
-        if (!cancelled) setAssembled(true)
+        settle()
       })
 
     return () => {
@@ -257,13 +283,16 @@ export const BloxityAvatar = forwardRef(function BloxityAvatar(
         })
       }
     }
-  }, [rig, equipped, onStep, custom, baseRest])
+  }, [rig, equipped, onStep, custom, baseRest, character, gl, camera, scene])
 
   // Frees what this avatar made when it goes (other players come and go). Loaded
   // part scenes and textures are shared through the loader cache, so they stay.
   useEffect(() => {
     const holder = bodyRef
+    const skins = skinsRef
     return () => {
+      for (const skin of skins.current) disposeSuitSkin(skin)
+      skins.current = []
       disposeMergedBody(holder.current)
       holder.current = null
       for (const mesh of rig.skinnedMeshes) mesh.material.dispose()
@@ -281,11 +310,9 @@ export const BloxityAvatar = forwardRef(function BloxityAvatar(
   }, [proportions])
   /** This avatar's emote playback (blend weight, clip time). */
   const emotePlayer = useMemo(() => createEmotePlayer(), [])
-  /** The sword this game avatar carries (`batId`): one mesh, placed from the pose. */
-  const wantsBat = Boolean(batId)
-  const bat = useMemo(() => (wantsBat ? createSwordMesh() : null), [wantsBat])
-  useEffect(() => () => bat && disposeSwordMesh(bat), [bat])
-  const batRef = useRef(null)
+  /** The space suit this avatar wears (`gear`), placed from the pose. Shared geometry: nothing to free. */
+  const wantsSuit = Boolean(gear)
+  const suit = useMemo(() => (wantsSuit ? createSuitGear() : null), [wantsSuit])
 
   useFrame((_state, delta) => {
     try {
@@ -294,18 +321,11 @@ export const BloxityAvatar = forwardRef(function BloxityAvatar(
       // A custom character takes no proportions (this still resets its rest pose).
       applyProportions(rig, custom ? null : proportionsRef.current)
       const motion = motionRef?.current ?? fallbackMotion(delta)
-      const pose = animateRig(rig, motion, 1 / fit.scale)
-      const held = batRef.current
-      if (held) {
-        // Where the pose put it: across the back, or in the hands.
-        const placed = pose?.bat
-        held.visible = Boolean(placed) && placed.mode !== 'none'
-        if (held.visible) {
-          held.setSword(batId())
-          held.position.copy(placed.pos)
-          held.quaternion.copy(placed.quat)
-          held.scale.setScalar(placed.scale)
-        }
+      animateRig(rig, motion, 1 / fit.scale)
+      if (suit) {
+        const [suitId, carrying] = gear()
+        suit.userData.update(suitId, carrying, suitId !== 'none')
+        for (const skin of skinsRef.current) updateSuitSkin(skin, suitId)
       }
       // A Boxity emote, blended over the pose (see avatarRig.updateEmote).
       const emote = emoteSource ? emoteSource() : motion.emote
@@ -329,7 +349,7 @@ export const BloxityAvatar = forwardRef(function BloxityAvatar(
       <group scale={fit.scale} position={[0, fit.footOffset, 0]}>
         <primitive object={character} />
       </group>
-      {bat && <primitive ref={batRef} object={bat} />}
+      {suit && <primitive object={suit} />}
     </group>
   )
 })
@@ -351,13 +371,10 @@ export const PlayerAvatar = forwardRef(function PlayerAvatar(props, ref) {
       local
       onStep={game.loadingStep}
       emoteSource={updateLocalEmote}
-      batId={yourBat}
+      gear={yourGear}
     />
   )
 })
-
-/** The sword you've equipped, for your avatar to carry. */
-const yourBat = () => getGame().profile.equippedTire
 
 /** The SDK's characterAccessoryMatrix(character, bone), or null on an SDK without it. */
 function characterAccessoryMatrix() {

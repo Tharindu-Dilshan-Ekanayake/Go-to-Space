@@ -1,41 +1,16 @@
 import { useState } from 'react'
 
-import { AD_REWARDS, GEM_PRODUCTS, PETS, SHOP } from '@shared/balance'
+import { AD_REWARDS, GEM_PRODUCTS } from '@shared/balance'
 import { formatNumber } from '@shared/format'
+import { bestReward } from '@shared/logic'
 
 import { buyGems, isRewardedAvailable, useGemsBalance, watchRewardedAd } from '../../bloxity/services'
-import { buy } from '../../net/shop'
 import { useGame } from '../../store/game'
 import Icon from '../Icon'
-import PetIcon from '../PetIcon'
-import RewardIcon from '../RewardIcon'
 import StrokeText from '../StrokeText'
-import { ChunkyButton, Price } from '../hud/parts'
+import { ChunkyButton } from '../hud/parts'
 import { GRADIENTS, u } from '../hud/style'
 import Panel from './Panel'
-
-const SECTIONS = [
-  { title: 'Passes', items: ['healthX2', 'winsX2', 'autoRoll'] },
-  { title: 'Training Dummies', items: ['padVeryOp', 'padBest'] },
-  { title: 'Specials', items: ['sphinx'] },
-]
-
-const ICONS = {
-  healthX2: 'heart',
-  winsX2: 'trophy',
-  autoRoll: 'bat',
-  padVeryOp: 'portal',
-  padBest: 'portal',
-}
-
-const BLURBS = {
-  healthX2: 'Double every Power gain, forever',
-  winsX2: 'Double the Wins from every throw, forever',
-  autoRoll: 'Winds up and throws your sword for you, throw after throw',
-  padVeryOp: 'Unlocks the x40 Diamond Golem dummy',
-  padBest: 'Unlocks the x100 Galaxy Titan dummy',
-  sphinx: `Limited: x${formatNumber(PETS.sphinx.mult)} Power pet`,
-}
 
 const BLURB_STYLE = { color: '#3a2a10', fontFamily: 'system-ui, sans-serif', fontWeight: 700 }
 
@@ -79,6 +54,8 @@ const GRID = { gridTemplateColumns: `repeat(auto-fill, minmax(${u(200)}, 1fr))`,
  */
 function GemsSection() {
   const balance = useGemsBalance()
+  const ownsX2 = useGame((s) => Boolean(s.profile.passes.moneyX2))
+  const ownsSolar = useGame((s) => s.profile.ownedSuits.includes('solar'))
   const [busy, setBusy] = useState(null)
   const [message, setMessage] = useState(null)
   const purchase = async (sku) => {
@@ -88,6 +65,7 @@ function GemsSection() {
     setBusy(null)
     if (!result.success) setMessage(result.error ? `Purchase not completed: ${result.error}` : 'Purchase not completed')
   }
+  const owned = { money_x2: ownsX2, solar_suit: ownsSolar }
   return (
     <div>
       <div className="flex flex-wrap items-baseline justify-between" style={{ gap: u(10) }}>
@@ -102,10 +80,16 @@ function GemsSection() {
       </div>
       <div className="grid" style={GRID}>
         {Object.entries(GEM_PRODUCTS).map(([sku, product]) => (
-          <Card key={sku} icon={<RewardIcon icon={product.icon} size={u(96)} />} name={product.name} blurb={product.blurb}>
-            <ChunkyButton gradient={GRADIENTS.blueButton} disabled={busy !== null} onClick={() => purchase(sku)} className="w-full" style={{ height: u(58) }}>
+          <Card key={sku} icon={<Icon name={product.icon} size={u(96)} />} name={product.name} blurb={product.blurb} faded={owned[sku]}>
+            <ChunkyButton
+              gradient={owned[sku] ? GRADIENTS.greyButton : GRADIENTS.blueButton}
+              disabled={busy !== null || owned[sku]}
+              onClick={() => purchase(sku)}
+              className="w-full"
+              style={{ height: u(58) }}
+            >
               <span style={{ fontSize: u(30) }}>
-                <StrokeText stroke={u(6)}>{busy === sku ? '...' : 'Buy with Gems'}</StrokeText>
+                <StrokeText stroke={u(6)}>{owned[sku] ? 'Owned' : busy === sku ? '...' : 'Buy with Gems'}</StrokeText>
               </span>
             </ChunkyButton>
           </Card>
@@ -122,9 +106,10 @@ function GemsSection() {
   )
 }
 
-/** Free potions for watching an ad (Boxity rewarded ads), when Boxity has one to show. */
+/** Free Money for watching an ad (Boxity rewarded ads), when Boxity has one to show. */
 function FreeSection() {
   const [state, setState] = useState({})
+  const best = useGame((s) => bestReward(s.profile))
   if (!isRewardedAvailable()) return null
   const watch = async (placement) => {
     setState((s) => ({ ...s, [placement]: 'watching' }))
@@ -137,15 +122,10 @@ function FreeSection() {
       <div className="grid" style={GRID}>
         {Object.entries(AD_REWARDS).map(([placement, reward]) => {
           const status = state[placement]
+          const money = best * (reward.grant.deliveries || 0)
           return (
-            <Card key={placement} icon={<Icon name={reward.icon} size={u(96)} />} name={reward.label} blurb="Watch a short ad to get it">
-              <ChunkyButton
-                gradient={GRADIENTS.greenButton}
-                disabled={status === 'watching'}
-                onClick={() => watch(placement)}
-                className="w-full"
-                style={{ height: u(58) }}
-              >
+            <Card key={placement} icon={<Icon name={reward.icon} size={u(96)} />} name={reward.label} blurb={`Watch a short ad for $${formatNumber(money)}`}>
+              <ChunkyButton gradient={GRADIENTS.greenButton} disabled={status === 'watching'} onClick={() => watch(placement)} className="w-full" style={{ height: u(58) }}>
                 <span style={{ fontSize: u(28) }}>
                   <StrokeText stroke={u(6)}>{status === 'watching' ? '...' : status === 'retry' ? 'Try again later' : status === 'done' ? 'Got it!' : 'Watch Ad'}</StrokeText>
                 </span>
@@ -158,45 +138,12 @@ function FreeSection() {
   )
 }
 
-/** Everything Wins can buy besides swords, enchantments, eggs and Power packs, grouped, plus Gems and free rewards. */
+/** Gems extras and free rewards. (Money is spent on suits and destinations, in their own panels.) */
 export function StorePanel() {
-  const passes = useGame((s) => s.profile.passes)
-  const wins = useGame((s) => s.profile.wins)
   return (
-    <Panel title="STORE" width={1080}>
+    <Panel title="STORE" icon="store" width={1080}>
       <div className="flex flex-col" style={{ gap: u(18) }}>
         <FreeSection />
-        {SECTIONS.map((section) => (
-          <div key={section.title}>
-            <SectionTitle>{section.title}</SectionTitle>
-            <div className="grid" style={GRID}>
-              {section.items.map((id) => {
-                const product = SHOP[id]
-                const owned = product.kind === 'pass' && passes[id]
-                const icon = id === 'sphinx' ? <PetIcon id="sphinx" size={u(96)} /> : <Icon name={ICONS[id]} size={u(96)} />
-                return (
-                  <Card key={id} icon={icon} name={product.name} blurb={BLURBS[id]} faded={owned}>
-                    <ChunkyButton
-                      gradient={owned ? GRADIENTS.greyButton : GRADIENTS.greenButton}
-                      disabled={owned}
-                      onClick={() => buy(id)}
-                      className="w-full"
-                      style={{ height: u(58) }}
-                    >
-                      {owned ? (
-                        <span style={{ fontSize: u(30) }}>
-                          <StrokeText stroke={u(6)}>Owned</StrokeText>
-                        </span>
-                      ) : (
-                        <Price amount={product.price} size={32} afford={wins >= product.price} />
-                      )}
-                    </ChunkyButton>
-                  </Card>
-                )
-              })}
-            </div>
-          </div>
-        ))}
         <GemsSection />
       </div>
     </Panel>

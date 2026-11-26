@@ -3,11 +3,10 @@ import { environment } from '../bloxity/env'
 import { GAME_SLUG, joinToken, rememberSaveTicket, saveTickets } from '../bloxity/identity'
 import { getSDK, safeCall, waitForSDK } from '../bloxity/sdk'
 
-import { ghostStart } from '../game/roll/path'
 import { runtime } from '../game/runtime'
 import { getGame } from '../store/game'
 import { setTransport } from './actions'
-import { handleServerEvent } from './events'
+import { handleServerEvent, spawnAt } from './events'
 import { createLocalServer } from './localServer'
 import { clearRemotePlayers, removeRemotePlayer, upsertRemotePlayer } from './remotePlayers'
 
@@ -118,6 +117,8 @@ async function healthOf(url) {
 }
 
 function startLocal(identity, message) {
+  // Offline, our own clock is the only one.
+  getGame().setClockOffset(0)
   const local = createLocalServer({ ...identity, onEvent: handleServerEvent })
   active = { kind: 'local', close: () => local.close() }
   setTransport(local)
@@ -220,27 +221,20 @@ function attachRoom(room, identity, Callbacks, endpoint, gen) {
   room.onMessage('*', (type, payload) => {
     switch (type) {
       case 'spawn':
-        runtime.player.position.set(payload.x, 0, payload.z)
+        spawnAt(payload.place, payload.x, payload.z)
+        break
+      case 'clock':
+        // Our countdown runs on the server's clock (the rocket leaves on it).
+        getGame().setClockOffset(Number(payload.now) - Date.now() || 0)
         break
       case 'correct':
         runtime.player.position.set(payload.x, payload.y, payload.z)
-        break
-      case 'stock':
-        getGame().setSphinxStock(payload.sphinx)
         break
       case 'saveTicket':
         rememberSaveTicket(payload)
         break
       case 'leaderboards':
         getGame().setLeaderboards(payload)
-        break
-      case 'ghostRoll':
-        // Never your own throw (yours is flying already), and only throws down your world's
-        // field. Their avatar plays the throw (remote/) and their sword flies down its own
-        // line of the field (roll/SwordFlight).
-        if (payload.sid === room.sessionId) break
-        if ((payload.world || 0) !== (getGame().profile.world || 0)) break
-        runtime.ghostRolls.set(payload.sid, { ...payload, ...ghostStart(payload), startedAt: performance.now() })
         break
       case 'kicked':
         leaving = true
@@ -278,6 +272,8 @@ function attachRoom(room, identity, Callbacks, endpoint, gen) {
   let last = { x: NaN, y: NaN, z: NaN, a: '' }
   let lastSentAt = 0
   const posId = setInterval(() => {
+    // Mid-trip there's nothing to report: the room put us at our arrival point.
+    if (getGame().trip) return
     const p = runtime.player.position
     // A Boxity emote plays as anim 'emote:<id>' (see bloxity/emotes.js).
     const a = reportedAnim(runtime.player.anim)

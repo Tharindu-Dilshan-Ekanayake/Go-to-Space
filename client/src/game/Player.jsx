@@ -1,44 +1,38 @@
-import { useFrame, useThree } from '@react-three/fiber'
+import { useFrame } from '@react-three/fiber'
 import { Suspense, useEffect, useMemo, useRef } from 'react'
 import { Quaternion, Vector3 } from 'three'
 
-import { CHARGE_TIME } from '@shared/balance'
-import { isPadUnlocked } from '@shared/logic'
-import { BATTER_YAW, cageBatterSpot, clampToWalkable, groundHeightAt, inRollZone, PAD_COUNT, padAt, PAD_YAWS, STATIC_COLLIDERS, THROW_STAGE } from '@shared/world'
+import { gravityOf, suitById } from '@shared/balance'
+import { clampToWalkable, groundHeightAt, jetPad, jetSeats, jetsOf, layoutOf, MAX_HEIGHT } from '@shared/world'
 
+import { remotePlayers } from '../net/remotePlayers'
 import { sfx } from '../audio/sfx'
 import { getGame } from '../store/game'
 import ErrorBoundary from '../ui/ErrorBoundary'
-import { CLICK_PLANT_S, CLICK_POSE_S, sinceClick, tapSwing } from './clickSwing'
 import FallbackAvatar from './FallbackAvatar'
 import PlayerAvatar from './PlayerAvatar'
-import { RUN_CADENCE } from './kick'
-import { actions } from '../net/actions'
-import { cancelPull, grab, heldFor, isPulling, launch, pressThrow, releaseThrow, slowAt, standAt, updatePull } from './launch'
-import { BODY } from './playerPose'
-import { swordLength } from './swords'
-import { roll } from './roll/rollControl'
+import { SIT_HIP } from './playerPose'
 import { runtime } from './runtime'
+import { yourGear } from './suitGear'
 import useKeyboard from './useKeyboard'
 
 export const PLAYER_HEIGHT = 1.8
 const RADIUS = 0.45
 
-const WALK_SPEED = 10.875
+const WALK_SPEED = 10
 const ACCELERATION = 16
+/** Earth's gravity, in game units; other places scale it (balance gravity). */
 const GRAVITY = 32
 const JUMP_SPEED = 10.5
-/** Ledges up to this high are walked straight onto (the showroom's back stage). */
-const STEP_UP = 1.05
-/** How long the throw's pose plays (seconds) while waiting for the authority's answer. */
-const THROW_POSE_S = 0.95
-/** Each pad's training spot and the way you face there (shared/world), made once: nothing per frame. */
-const TRAIN_SPOTS = Array.from({ length: PAD_COUNT }, (_, i) => cageBatterSpot(i))
-/** On the stage's top (not just beside it at its foot). */
-const ON_STAGE_Y = THROW_STAGE.height - 0.05
-/** A press on the 3D view this short (ms) and this still (px) is a click, not a camera drag. */
-const TAP_MS = 350
-const TAP_PX = 10
+/** Low gravity lets jumps go very high; this keeps them fun rather than endless. */
+const MIN_GRAVITY = 0.22
+/** Jetpack: upward push while jump is held in the air, and the top speed it reaches. */
+const JET_THRUST = 22
+const JET_MAX_UP = 7
+/** How long one burn lasts before it has to touch down and recharge (seconds). */
+const JET_FUEL = 2.2
+/** Ledges up to this high are walked straight onto (the launch pad's deck edge isn't). */
+const STEP_UP = 0.6
 
 // Scratch objects, reused each frame so the loop allocates nothing.
 const _input = new Vector3()
@@ -48,7 +42,35 @@ const _camRight = new Vector3()
 const _targetQuat = new Quaternion()
 const _up = new Vector3(0, 1, 0)
 const _clamped = { x: 0, z: 0 }
-const _pivot = new Vector3()
+const _seatPos = new Vector3()
+const _seatQuat = new Quaternion()
+
+/**
+ * Climbing into a seat takes at least this long (seconds), longer for seats further from
+ * the pad (the liner's back rows): never faster than a brisk walk, so the server sees an
+ * ordinary move.
+ */
+const CLIMB_S = 0.5
+const CLIMB_SPEED = 7
+
+/** Is someone else already sitting in `seat`? */
+function seatTaken(seat) {
+  for (const r of remotePlayers.values()) {
+    if (r.anim === 'sit' && Math.abs(r.position.x - seat.x) < 0.7 && Math.abs(r.position.z - seat.z) < 0.7) return true
+  }
+  return false
+}
+
+/** The free seat of the jet whose boarding ring you're standing on, if any (and its ring). */
+function seatAt(place, x, z) {
+  for (const jet of jetsOf(place)) {
+    const pad = jetPad(jet)
+    if (Math.hypot(x - pad.x, z - pad.z) > pad.radius) continue
+    const seat = jetSeats(jet).find((s) => !seatTaken(s))
+    return seat ? { seat, pad } : null
+  }
+  return null
+}
 
 /** Pushes a circle out of an axis-aligned rect. Returns true on contact. */
 function pushOut(pos, rect) {
@@ -67,8 +89,7 @@ function pushOut(pos, rect) {
     return true
   }
 
-  // Centre inside the rect (spawned in, or a wall appeared on top of us): leave by the
-  // nearest side.
+  // Centre inside the rect: leave by the nearest side.
   const left = pos.x - rect.minX
   const right = rect.maxX - pos.x
   const near = pos.z - rect.minZ
@@ -84,17 +105,15 @@ function pushOut(pos, rect) {
 /**
  * The local player: a kinematic character controller.
  *
- * No physics engine: the world is flat ground, a few raised floors and a list of
- * rectangular walls, which a circle-vs-rect push-out handles exactly. That saves the
- * ~2 MB Rapier WASM download and keeps the active rigid body count at zero.
+ * No physics engine: every place is flat ground, a few raised floors and a list of
+ * rectangular walls (shared/world.js layouts), which a circle-vs-rect push-out handles
+ * exactly. That saves the ~2 MB Rapier WASM download and keeps the active rigid body
+ * count at zero.
  *
- * Walk onto a throw spot in the THROW ZONE and you step up to throw (launch.js): facing
- * down the valley, your sword on your shoulder. HOLD THROW - the button, Space / E, or
- * press and hold on the game - to wind up, and let go to throw (RollButton shows the
- * meter); the throw plays here. The flight itself is the sword's, not yours (roll/): you
- * stay on your spot, watching it go, then celebrate. Push the stick to step off. At a
- * training dummy you step onto its training spot and slash it again and again. Walking
- * about, your sword rides across your back.
+ * Gravity is the place's (long floaty jumps on the Moon), and your suit sets how fast
+ * you walk and how high you jump - the best ones carry a jetpack: hold jump in the air
+ * to fly up for a couple of seconds. Mid-trip you're frozen and hidden: the flight
+ * scene is on screen instead.
  *
  * Reads and writes `runtime.player`; never touches React state per frame.
  *
@@ -106,123 +125,117 @@ export function Player({ onAvatarReady }) {
   const keys = useKeyboard()
   const velocity = useRef(new Vector3())
   const vy = useRef(0)
-  /** The jump input last frame: on a throw spot, holding it winds up a throw. */
   const jumpHeld = useRef(false)
-  /** Space pressed on a throw spot (so letting go of it throws). */
-  const jumpWound = useRef(false)
-
-  // A press on the 3D view (not on the HUD, which sits above it): on a throw spot, press
-  // and hold to wind up a throw, let go to throw; anywhere else a quick click or tap (not
-  // a drag to turn the camera) is a click slash (clickSwing.js) for Power.
-  const gl = useThree((s) => s.gl)
-  useEffect(() => {
-    const el = gl.domElement
-    const downs = new Map()
-    const onDown = (e) => {
-      downs.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now(), button: e.button })
-      if (e.pointerType === 'mouse' && e.button !== 0) return
-      if (isPulling() && !roll.active && !getGame().panel) pressThrow()
-    }
-    const onUp = (e) => {
-      const d = downs.get(e.pointerId)
-      downs.delete(e.pointerId)
-      if (!d || (e.pointerType === 'mouse' && d.button !== 0)) return
-      if (launch.stage === 'charge') {
-        releaseThrow()
-        return
-      }
-      if (performance.now() - d.t < TAP_MS && Math.hypot(e.clientX - d.x, e.clientY - d.y) < TAP_PX) tapSwing()
-    }
-    const onCancel = (e) => {
-      downs.delete(e.pointerId)
-      if (launch.stage === 'charge' && downs.size === 0) releaseThrow()
-    }
-    el.addEventListener('pointerdown', onDown)
-    el.addEventListener('pointerup', onUp)
-    el.addEventListener('pointercancel', onCancel)
-    return () => {
-      el.removeEventListener('pointerdown', onDown)
-      el.removeEventListener('pointerup', onUp)
-      el.removeEventListener('pointercancel', onCancel)
-    }
-  }, [gl])
+  /** Jetpack burn left (seconds), refilled on landing. */
+  const fuel = useRef(JET_FUEL)
+  /**
+   * The seat you're in: `{ seat, pad, place, from, t }` (`from` where you climbed in from,
+   * `t` 0-1 through the climb), or null. `padLock` is the ring you just climbed out
+   * onto: it won't seat you again until you've stepped off it.
+   */
+  const sitting = useRef(null)
+  const padLock = useRef(null)
 
   /** Handed to the avatar so it can pose itself. A ref: written every frame. */
-  const motionRef = useRef({
-    time: 0,
-    speed: 0,
-    grounded: true,
-    maxSpeed: WALK_SPEED,
-    vy: 0,
-    stride: 0,
-    bat: undefined,
-    swingT: 0,
-    coil: 0,
-    strain: 0,
-    great: false,
-    swordLen: 1.3,
-  })
+  const motionRef = useRef({ time: 0, speed: 0, grounded: true, maxSpeed: WALK_SPEED, vy: 0, stride: 0, swordLen: 1.4 })
 
   // The blob shadow follows the character.
   const shownAt = useMemo(() => new Vector3().copy(runtime.player.position), [])
+  const casterRef = useRef(null)
   useEffect(() => {
-    const caster = { position: shownAt, size: 1.1 }
+    const caster = { position: shownAt, size: 1.1, visible: true }
+    casterRef.current = caster
     runtime.shadowCasters.add(caster)
     return () => runtime.shadowCasters.delete(caster)
   }, [shownAt])
 
   useFrame((state, rawDelta) => {
     const delta = Math.min(rawDelta, 0.05)
-    const now = performance.now()
     const player = runtime.player
     const pos = player.position
     const k = keys.current
     const joy = runtime.input
     const motion = motionRef.current
     const game = getGame()
-    const profile = game.profile
+    const { profile } = game
+    const place = profile.location
+    const layout = layoutOf(place)
+    const suit = suitById(profile.suit)
+    const flying = Boolean(game.trip)
     motion.time += delta
 
     const group = groupRef.current
     const visual = visualRef.current
-
-    // --- The throw stage: up on it, winding up, off it ----------------------------
-    // Anywhere on the stage's top you're up to throw; walk along it to pick your line.
-    const onStage = inRollZone(pos.x, pos.z) && player.grounded && pos.y >= ON_STAGE_Y
-    if (!roll.active && !isPulling() && onStage && !player.frozen && !game.panel) {
-      grab(false, now)
-      sfx.stepIn()
+    const cockpit = flying ? runtime.flightSeat : null
+    if (group) group.visible = !flying || Boolean(cockpit)
+    if (casterRef.current) casterRef.current.visible = !flying && !sitting.current
+    if (flying) {
+      velocity.current.set(0, 0, 0)
+      vy.current = 0
+      sitting.current = null
+      motion.sit = Boolean(cockpit)
+      // Riding a spaceplane: sat in its cockpit (the flight scene's seat anchor).
+      if (cockpit && group && visual) {
+        cockpit.updateWorldMatrix(true, false)
+        cockpit.matrixWorld.decompose(_seatPos, _seatQuat, _move)
+        group.position.copy(_seatPos)
+        group.position.y -= SIT_HIP
+        visual.quaternion.copy(_seatQuat)
+      }
+      return
     }
-    // Walked off it (or moved off it some other way: a correction, a portal).
-    if (!roll.active && isPulling() && !launch.released && !onStage) cancelPull()
-    const atBat = !roll.active && isPulling()
-    // Winding up or throwing: planted, facing down the valley.
-    const winding = atBat && (launch.stage === 'charge' || launch.released)
-    if (atBat) standAt(pos.x, pos.y, pos.z)
+
+    // --- In a seat --------------------------------------------------------------
+    const jumpNow = !player.frozen && game.panel === null && (k.jump || joy.jump)
+    const seated = sitting.current
+    if (seated && seated.place !== place) sitting.current = null
+    if (sitting.current) {
+      const { seat, pad, from } = seated
+      if (jumpNow && !jumpHeld.current && seated.t >= 1) {
+        // Climb out onto the boarding ring, with a little hop.
+        jumpHeld.current = true
+        sitting.current = null
+        padLock.current = pad
+        pos.set(pad.x, groundHeightAt(place, pad.x, pad.z), pad.z)
+        vy.current = 5
+        player.grounded = false
+        sfx.jump()
+      } else {
+        jumpHeld.current = jumpNow
+        seated.t = Math.min(1, seated.t + delta / seated.duration)
+        const t = seated.t * seated.t * (3 - 2 * seated.t)
+        const y = seat.y - SIT_HIP
+        // A hop up and over the cockpit rim.
+        pos.set(from.x + (seat.x - from.x) * t, from.y + (y - from.y) * t + Math.sin(t * Math.PI) * 0.8, from.z + (seat.z - from.z) * t)
+        player.yaw = seat.yaw
+        player.grounded = true
+        player.speed = 0
+        player.anim = 'sit'
+        player.jetting = false
+        velocity.current.set(0, 0, 0)
+        vy.current = 0
+        motion.sit = true
+        motion.speed = 0
+        motion.grounded = true
+        if (visual) {
+          _targetQuat.setFromAxisAngle(_up, seat.yaw)
+          visual.quaternion.slerp(_targetQuat, 1 - Math.pow(0.0005, delta))
+        }
+        if (group) group.position.copy(pos)
+        shownAt.copy(pos)
+        return
+      }
+    }
+    motion.sit = false
 
     // --- Input, relative to the camera ----------------------------------------
     _input.set(0, 0, 0)
-    const still = player.frozen
+    const still = player.frozen || game.panel !== null
     if (!still) {
-      _input.set(
-        (k.right ? 1 : 0) - (k.left ? 1 : 0) + joy.joyX,
-        0,
-        (k.backward ? 1 : 0) - (k.forward ? 1 : 0) - joy.joyY,
-      )
+      _input.set((k.right ? 1 : 0) - (k.left ? 1 : 0) + joy.joyX, 0, (k.backward ? 1 : 0) - (k.forward ? 1 : 0) - joy.joyY)
     }
-    let inputLength = Math.min(1, _input.length())
-
-    if (atBat) {
-      // Auto Throw follows its toggle, even mid-turn.
-      launch.auto = false
-      // The meter, a throw the authority never answered, Auto Throw's release.
-      if (updatePull(now) === 'auto') {
-        sfx.throwRelease(1)
-        actions.roll()
-      }
-      // Winding up you stand your ground; otherwise walk the stage freely.
-      if (winding || launch.stage === 'charge') inputLength = 0
-    }
+    const inputLength = Math.min(1, _input.length())
+    const topSpeed = WALK_SPEED * suit.speed
 
     if (inputLength > 0.02) {
       _input.normalize()
@@ -237,65 +250,53 @@ export function Player({ onAvatarReady }) {
         .addScaledVector(_camForward, -_input.z)
         .addScaledVector(_camRight, _input.x)
         .normalize()
-        .multiplyScalar(WALK_SPEED * inputLength)
+        .multiplyScalar(topSpeed * inputLength)
     } else {
       _move.set(0, 0, 0)
     }
-    // A click slash plants you for a moment while you cut.
-    const clicking = sinceClick(now) < CLICK_PLANT_S
-    const planted = winding || launch.stage === 'charge' || roll.active || clicking
 
-    // Ease towards the target velocity: crisp, but no instant 0->max snaps.
-    const blend = 1 - Math.exp(-ACCELERATION * delta)
-    velocity.current.lerp(_move, blend)
-    if (planted) velocity.current.set(0, 0, 0)
+    // Ease towards the target velocity: crisp, but no instant 0->max snaps. A little
+    // less grip in the air, more so in low gravity.
+    const gravityScale = Math.max(MIN_GRAVITY, gravityOf(place))
+    const grip = player.grounded ? ACCELERATION : ACCELERATION * (0.35 + 0.4 * gravityScale)
+    velocity.current.lerp(_move, 1 - Math.exp(-grip * delta))
 
     // --- Horizontal move + collision --------------------------------------------
     const prevX = pos.x
     const prevZ = pos.z
     pos.x += velocity.current.x * delta
     pos.z += velocity.current.z * delta
-
-    // At a dummy, standing still: ease onto its training spot to slash it.
-    const pad = padAt(pos.x, pos.z)
-    const speedNow = Math.hypot(velocity.current.x, velocity.current.z)
-    const training = pad >= 0 && player.grounded && speedNow < 0.5 && !still && !planted && isPadUnlocked(profile, pad)
-    if (training) {
-      const ease = 1 - Math.exp(-10 * delta)
-      pos.x += (TRAIN_SPOTS[pad].x - pos.x) * ease
-      pos.z += (TRAIN_SPOTS[pad].z - pos.z) * ease
-    }
-
-    for (const rect of STATIC_COLLIDERS) pushOut(pos, rect)
-    for (const rect of runtime.dynamicColliders) pushOut(pos, rect)
-    clampToWalkable(pos.x, pos.z, _clamped)
+    for (const rect of layout.colliders) pushOut(pos, rect)
+    clampToWalkable(place, pos.x, pos.z, _clamped)
     pos.x = _clamped.x
     pos.z = _clamped.z
 
-    // A ledge too tall to step onto acts as a wall.
-    let floor = groundHeightAt(pos.x, pos.z)
+    // A ledge too tall to step onto acts as a wall (unless you jumped up to it).
+    let floor = groundHeightAt(place, pos.x, pos.z)
     if (floor - pos.y > STEP_UP) {
       pos.x = prevX
       pos.z = prevZ
-      floor = groundHeightAt(pos.x, pos.z)
+      floor = groundHeightAt(place, pos.x, pos.z)
     }
 
     // --- Vertical ---------------------------------------------------------------
-    const jumpInput = k.jump || joy.jump
+    const jumpInput = !still && (k.jump || joy.jump)
     const pressed = jumpInput && !jumpHeld.current
     jumpHeld.current = jumpInput
-    // On the throw stage, the jump button (Space) winds up a throw instead: hold, let go.
-    if (pressed && atBat && isPulling()) pressThrow(now)
-    if (!jumpInput && launch.stage === 'charge' && jumpWound.current) releaseThrow(now)
-    jumpWound.current = jumpInput && atBat ? jumpWound.current || pressed : false
-    const wantJump = !still && !roll.active && !atBat && jumpInput
-    if (wantJump && player.grounded) {
-      vy.current = JUMP_SPEED
+    const gravity = GRAVITY * gravityScale
+    let jetting = false
+    if (pressed && player.grounded) {
+      vy.current = JUMP_SPEED * suit.jump
       player.grounded = false
       sfx.jump()
+    } else if (jumpInput && !player.grounded && suit.jetpack && fuel.current > 0 && vy.current < JET_MAX_UP) {
+      // Holding jump in the air on a jetpack suit: burn upwards.
+      jetting = true
+      fuel.current = Math.max(0, fuel.current - delta)
+      vy.current = Math.min(JET_MAX_UP, vy.current + (JET_THRUST + gravity) * delta)
     }
-    vy.current -= GRAVITY * delta
-    pos.y += vy.current * delta
+    vy.current -= gravity * delta
+    pos.y = Math.min(MAX_HEIGHT - 1, pos.y + vy.current * delta)
 
     if (pos.y <= floor) {
       // Coming down from a jump (not just stepping off a kerb) lands with a thump.
@@ -303,46 +304,31 @@ export function Player({ onAvatarReady }) {
       pos.y = floor
       vy.current = 0
       player.grounded = true
+      fuel.current = JET_FUEL
+    } else if (player.grounded && vy.current <= 0 && pos.y - floor < 0.5) {
+      // Walking downhill: keep your feet on the slope instead of floating off it.
+      pos.y = floor
+      vy.current = 0
     } else if (pos.y - floor > 0.05) {
-      // Walked off a ledge, or still rising from a jump.
       player.grounded = false
+    }
+
+    // --- Boarding rings: step on one (on your feet) and you climb into the jet ----
+    if (padLock.current && Math.hypot(pos.x - padLock.current.x, pos.z - padLock.current.z) > padLock.current.radius + 0.4) padLock.current = null
+    if (!padLock.current && player.grounded && !still) {
+      const found = seatAt(place, pos.x, pos.z)
+      if (found) {
+        const far = Math.hypot(found.seat.x - pos.x, found.seat.y - pos.y, found.seat.z - pos.z)
+        sitting.current = { ...found, place, from: { x: pos.x, y: pos.y, z: pos.z }, t: 0, duration: Math.max(CLIMB_S, far / CLIMB_SPEED) }
+        velocity.current.set(0, 0, 0)
+      }
     }
 
     // --- Facing -----------------------------------------------------------------
     const speed = Math.hypot(velocity.current.x, velocity.current.z)
-    const batting = winding || launch.stage === 'charge' || roll.active
-    if (training) player.yaw = PAD_YAWS[pad]
-    else if (batting) player.yaw = BATTER_YAW
-    else if (speed > 0.3) player.yaw = Math.atan2(velocity.current.x, velocity.current.z)
+    if (speed > 0.3) player.yaw = Math.atan2(velocity.current.x, velocity.current.z)
 
-    // --- The sword: ready on your shoulder, winding up, throwing, watching it fly ---
-    motion.bat = undefined
-    motion.cheer = 0
-    motion.coil = 0
-    motion.strain = 0
-    motion.swordLen = swordLength(profile.equippedTire)
-    const sinceSwing = (now - launch.swungAt) / 1000
-    if (roll.active) {
-      motion.bat = 'after'
-      motion.swingT = Math.max(0, sinceSwing)
-      motion.great = roll.hit === 'perfect' || roll.hit === 'great'
-    } else if (atBat && launch.released && sinceSwing < THROW_POSE_S) {
-      motion.bat = 'throw'
-      motion.swingT = sinceSwing
-    } else if (atBat && (launch.stage === 'charge' || speed < 0.3)) {
-      // Ready on the stage, sword on your shoulder - winding up as THROW is held, straining
-      // once the meter is full. (Walking along the stage, it rides on your back.)
-      motion.bat = 'ready'
-      motion.coil = slowAt(now)
-      motion.strain = Math.min(1, Math.max(0, (heldFor(now) - CHARGE_TIME) / 0.6))
-    } else if (!training && sinceClick(now) < CLICK_POSE_S) {
-      // A click slash: one cut through the air in front of you.
-      motion.bat = 'slash'
-      motion.swingT = sinceClick(now)
-    }
-
-    // A pose pinned from the ?debug console (window.__pp.runtime.debugPose), for checking
-    // the animation frame by frame. Never set in normal play.
+    // A pose pinned from the ?debug console (window.__pp.runtime.debugPose). Never set in normal play.
     if (runtime.debugPose) Object.assign(motion, runtime.debugPose)
 
     // --- Where the body is ------------------------------------------------------
@@ -351,39 +337,63 @@ export function Player({ onAvatarReady }) {
     const shownY = group ? group.position.y : pos.y
     const steppingUp = player.grounded && pos.y > shownY
     const y = steppingUp ? shownY + (pos.y - shownY) * Math.min(1, delta * 18) : pos.y
-    _pivot.set(pos.x, y + BODY.pivot, pos.z)
     if (visual) {
       _targetQuat.setFromAxisAngle(_up, player.yaw)
-      visual.quaternion.slerp(_targetQuat, batting ? 1 - Math.pow(0.00001, delta) : 1 - Math.pow(0.0005, delta))
+      visual.quaternion.slerp(_targetQuat, 1 - Math.pow(0.0005, delta))
     }
-    if (group) group.position.set(_pivot.x, _pivot.y - BODY.pivot, _pivot.z)
-    shownAt.set(_pivot.x, pos.y, _pivot.z)
+    if (group) group.position.set(pos.x, y, pos.z)
+    shownAt.set(pos.x, pos.y, pos.z)
 
     // --- Publish motion ---------------------------------------------------------
     player.speed = speed
-    // What other players see: 'pull' is winding up a throw on the stage (the template's
-    // name), 'run' slashing a dummy, 'swing' a click slash.
-    player.anim = !player.grounded ? 'jump' : batting ? 'pull' : training ? 'run' : motion.bat === 'slash' ? 'swing' : speed > 0.5 ? 'walk' : 'idle'
-
+    player.anim = jetting ? 'fly' : !player.grounded ? 'jump' : speed > 0.5 ? 'walk' : 'idle'
+    runtime.player.jetting = jetting
     motion.speed = speed
+    motion.maxSpeed = topSpeed
     motion.grounded = player.grounded
-    motion.vy = vy.current
-    // At a dummy: a slash every TRAIN_INTERVAL (playerPose, `run`).
-    motion.run = training ? 1 : 0
-    motion.stride += delta * (training ? RUN_CADENCE : 5 + 6 * Math.min(1, speed / WALK_SPEED))
-    runtime.player.cagePhase = training ? motion.stride : -1
-    runtime.player.cage = training ? pad : -1
+    // Low gravity: legs tuck up for longer (the pose reads vy).
+    motion.vy = vy.current / Math.sqrt(gravityScale)
+    motion.stride += delta * (5 + 6 * Math.min(1, speed / topSpeed)) * (player.grounded ? 1 : 0.4)
   })
 
   return (
     <group ref={groupRef}>
-      <group ref={visualRef}>
-        <ErrorBoundary fallback={<FallbackAvatar motionRef={motionRef} onReady={onAvatarReady} />}>
-          <Suspense fallback={<FallbackAvatar motionRef={motionRef} />}>
+      <group ref={visualRef} position={[0, 0, 0]}>
+        <ErrorBoundary fallback={<FallbackAvatar motionRef={motionRef} gear={yourGear} onReady={onAvatarReady} />}>
+          <Suspense fallback={<FallbackAvatar motionRef={motionRef} gear={yourGear} />}>
             <PlayerAvatar onReady={onAvatarReady} targetHeight={PLAYER_HEIGHT} motionRef={motionRef} />
           </Suspense>
         </ErrorBoundary>
       </group>
+      <JetFlame />
+    </group>
+  )
+}
+
+/**
+ * The jetpack's two flames, shown while you burn: two small cones under the pack. One
+ * draw call (merged), hidden the rest of the time.
+ */
+function JetFlame() {
+  const ref = useRef(null)
+  useFrame((state) => {
+    const mesh = ref.current
+    if (!mesh) return
+    const on = Boolean(runtime.player.jetting) && !getGame().trip
+    mesh.visible = on
+    if (!on) return
+    mesh.rotation.y = runtime.player.yaw
+    const flicker = 0.85 + Math.sin(state.clock.elapsedTime * 60) * 0.15
+    mesh.scale.set(1, flicker, 1)
+  })
+  return (
+    <group ref={ref} visible={false}>
+      {[-0.15, 0.15].map((x) => (
+        <mesh key={x} position={[x, 0.53, -0.55]} rotation={[Math.PI, 0, 0]}>
+          <coneGeometry args={[0.09, 0.45, 8]} />
+          <meshBasicMaterial color="#ffb347" toneMapped={false} />
+        </mesh>
+      ))}
     </group>
   )
 }

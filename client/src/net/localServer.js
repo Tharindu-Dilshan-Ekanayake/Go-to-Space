@@ -1,9 +1,10 @@
-import { applyOfflineProgress, normalizeProfile } from '@shared/logic'
+import { normalizeProfile } from '@shared/logic'
 import { PlayerSession } from '@shared/session'
 
 import { runtime } from '../game/runtime'
+import { spawnAt } from './events'
 
-const SAVE_KEY = 'tr.save.v1'
+const SAVE_KEY = 'ox.save.v1'
 const TICK_MS = 100
 const SAVE_MS = 5000
 
@@ -26,8 +27,6 @@ function loadSave() {
 export function createLocalServer({ id, name, onEvent }) {
   const profile = normalizeProfile(loadSave(), id, name)
   const startedAt = Date.now()
-  // "Keep training while you're offline": credit the pad you logged off on.
-  const offline = applyOfflineProgress(profile, startedAt)
 
   const session = new PlayerSession(profile, {
     now: startedAt,
@@ -59,8 +58,8 @@ export function createLocalServer({ id, name, onEvent }) {
   window.addEventListener('beforeunload', save)
   document.addEventListener('visibilitychange', onHide)
 
+  spawnAt(profile.location)
   session.sendProfile()
-  if (offline) onEvent('offline', offline)
 
   return {
     send(type, payload) {

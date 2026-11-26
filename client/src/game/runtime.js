@@ -1,6 +1,8 @@
 import { Vector3 } from 'three'
 
-import { SPAWN } from '@shared/world'
+import { layoutOf } from '@shared/world'
+
+const EARTH_SPAWN = layoutOf('earth').spawn
 
 /**
  * Per-frame mutable state shared between systems.
@@ -13,18 +15,15 @@ import { SPAWN } from '@shared/world'
  */
 export const runtime = {
   player: {
-    position: new Vector3(SPAWN.x, 0, SPAWN.z),
-    /** Facing, radians about +Y. PI faces north (-Z), towards the track. */
+    position: new Vector3(EARTH_SPAWN.x, 0, EARTH_SPAWN.z),
+    /** Facing, radians about +Y. PI faces north (-Z). */
     yaw: Math.PI,
     speed: 0,
     grounded: true,
-    /** 'idle' | 'walk' | 'run' (swinging in a cage) | 'pull' (up at bat) | 'jump' - what other players see. */
+    /** 'idle' | 'walk' | 'jump' | 'fly' | 'sit' (in a jet's seat) - what other players see. */
     anim: 'idle',
-    /** Set when the controller should ignore input. */
+    /** Set when the controller should ignore input (mid-trip). */
     frozen: false,
-    /** The batting cage you're swinging in (-1: none), and your swings' phase in it. */
-    cage: -1,
-    cagePhase: -1,
   },
 
   /** Touch input, written by the on-screen joystick. -1..1, +y = forward. */
@@ -35,35 +34,23 @@ export const runtime = {
   },
 
   camera: {
-    /** 'follow' orbits the player; 'roll' chases your ball (see roll/Roll.jsx). */
+    /** 'follow' orbits the player; 'flight' belongs to the trip scene. */
     mode: 'follow',
     yaw: 0,
-    pitch: 0.36,
-    distance: 11,
+    pitch: 0.32,
+    distance: 12,
     /** Set to jump the follow camera straight to its target next frame. */
     snap: false,
   },
 
-  /** What the sun's shadow box centres on while the camera chases your ball. */
-  flightFocus: null,
-
-  /**
-   * Other players' pets, written by the multiplayer layer: `{ id, position, yaw, hop }`
-   * per pet. Drawn by the same instanced pet meshes as yours.
-   */
-  remotePets: [],
-
-  /**
-   * Other players' hits to replay (their balls flying down their own lines), by their
-   * session id: `{ distance, duration, blocked, tireId, ballId, hit, x, z, startedAt }`.
-   */
-  ghostRolls: new Map(),
-
   /** A pose pinned over yours from the ?debug console (Player.jsx), or null. */
   debugPose: null,
 
-  /** Walls that come and go at runtime, e.g. locked pads. */
-  dynamicColliders: [],
+  /**
+   * The cockpit seat of the spaceplane you're riding (an Object3D the flight scene owns),
+   * or null: while it's set, your character sits there instead of being hidden.
+   */
+  flightSeat: null,
 
   /**
    * Things that get a blob shadow on low presets. Each entry is
@@ -72,8 +59,9 @@ export const runtime = {
   shadowCasters: new Set(),
 }
 
-/** Puts the player back at spawn, e.g. after a reconnect into a fresh lobby. */
-export function respawn() {
-  runtime.player.position.set(SPAWN.x, 0, SPAWN.z)
-  runtime.player.yaw = Math.PI
+/** Puts the player back at `place`'s spawn (Boxity's respawn request). */
+export function respawn(place) {
+  const { spawn, spawnYaw } = layoutOf(place)
+  runtime.player.position.set(spawn.x, 0, spawn.z)
+  runtime.player.yaw = spawnYaw
 }

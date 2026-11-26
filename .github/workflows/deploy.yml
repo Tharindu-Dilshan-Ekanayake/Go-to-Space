@@ -1,4 +1,4 @@
-# Ships Sword Toss Legends to Bloxity Legion: the dev branch to the dev channel, main to prod.
+# Ships Orbit Express to Bloxity Legion: the dev branch to the dev channel, main to prod.
 #
 #   server   -> Docker image in this repo's GitHub Container Registry, then Legion rolls
 #               it out behind its matchmaker (players reach it only through that)

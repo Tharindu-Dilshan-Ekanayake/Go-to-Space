@@ -3,7 +3,6 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { SPHINX_STOCK_DEFAULT } from '../../shared/balance.js'
 import { normalizeProfile } from '../../shared/logic.js'
 import { bloxity } from './bloxityEnv.js'
 import { setSaveTicketSecret } from './saveTickets.js'
@@ -48,14 +47,19 @@ export function mongoUriFrom(env = process.env) {
 /** A new random secret for save tickets (saveTickets.js), made once per database. */
 const newSecret = () => randomBytes(32).toString('hex')
 
-const BOARDS = { rebirths: 'rebirths', wins: 'totalWins', distance: 'bestDistance', playtime: 'playtime' }
+/**
+ * The in-game boards, by the database column each ranks on. The columns keep the names
+ * the stored rows already have (rebirths / totalWins / bestDistance); what goes into them
+ * is Orbit Express's: deliveries made, Money earned in total, places visited.
+ */
+const BOARDS = { deliveries: 'rebirths', earned: 'totalWins', places: 'bestDistance', playtime: 'playtime' }
 
 const leaderboardFields = (profile) => ({
   name: profile.name,
-  rebirths: profile.rebirths,
-  totalWins: profile.stats.totalWins,
+  rebirths: profile.stats.deliveries,
+  totalWins: profile.stats.totalEarned,
   playtime: profile.stats.playtime,
-  bestDistance: profile.stats.bestDistance,
+  bestDistance: profile.visited.length,
   updatedAt: profile.lastSeen,
 })
 
@@ -84,7 +88,6 @@ async function openMongo(uri) {
   await Promise.all([
     ...Object.values(BOARDS).map((field) => profiles.createIndex({ [field]: -1 })),
     gems.createIndex({ userId: 1, applied: 1 }),
-    kv.updateOne({ _id: 'sphinxStock' }, { $setOnInsert: { value: SPHINX_STOCK_DEFAULT } }, { upsert: true }),
   ])
 
   return {
@@ -163,14 +166,6 @@ async function openMongo(uri) {
     async releaseGem(transactionId, by) {
       await gems.updateOne({ _id: transactionId, appliedBy: by }, { $set: { applied: false }, $unset: { appliedAt: '', appliedBy: '' } })
     },
-    async stock() {
-      const doc = await kv.findOne({ _id: 'sphinxStock' })
-      return doc ? doc.value : SPHINX_STOCK_DEFAULT
-    },
-    async take() {
-      const doc = await kv.findOneAndUpdate({ _id: 'sphinxStock', value: { $gt: 0 } }, { $inc: { value: -1 } }, { returnDocument: 'after' })
-      return doc ? doc.value : null
-    },
     async secret() {
       // Made by whichever pod gets here first; every other pod reads the same one.
       const doc = await kv.findOneAndUpdate(
@@ -221,14 +216,14 @@ async function openSqlite(path) {
   if (!db.prepare('PRAGMA table_info(profiles)').all().some((c) => c.name === 'carried_to')) {
     db.exec('ALTER TABLE profiles ADD COLUMN carried_to TEXT')
   }
-  const columns = { rebirths: 'rebirths', wins: 'total_wins', distance: 'best_distance', playtime: 'playtime' }
-  const readStock = () => {
-    const row = db.prepare("SELECT value FROM kv WHERE key = 'sphinxStock'").get()
-    return row ? Number(row.value) : SPHINX_STOCK_DEFAULT
-  }
+  const columns = { deliveries: 'rebirths', earned: 'total_wins', places: 'best_distance', playtime: 'playtime' }
 
   // One process owns this file, so `owner` has nothing to guard against here.
   return {
+    async secret() {
+      db.prepare("INSERT INTO kv (key, value) VALUES ('saveTicketSecret', ?) ON CONFLICT(key) DO NOTHING").run(newSecret())
+      return db.prepare("SELECT value FROM kv WHERE key = 'saveTicketSecret'").get()?.value ?? null
+    },
     async load(id) {
       return db.prepare('SELECT data FROM profiles WHERE id = ?').get(id)?.data ?? null
     },
@@ -294,28 +289,11 @@ async function openSqlite(path) {
         by,
       )
     },
-    async stock() {
-      return readStock()
-    },
-    async secret() {
-      db.prepare("INSERT INTO kv (key, value) VALUES ('saveTicketSecret', ?) ON CONFLICT(key) DO NOTHING").run(newSecret())
-      return db.prepare("SELECT value FROM kv WHERE key = 'saveTicketSecret'").get()?.value ?? null
-    },
-    async take() {
-      const stock = readStock()
-      if (stock <= 0) return null
-      db.prepare("INSERT INTO kv (key, value) VALUES ('sphinxStock', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
-        String(stock - 1),
-      )
-      return stock - 1
-    },
     close: async () => db.close(),
   }
 }
 
 let store = null
-/** Sphinx stock as last known here; kept current from the database. */
-let stock = SPHINX_STOCK_DEFAULT
 
 /** 'mongo' or 'sqlite': which backend holds the saves (shown on /api/health). */
 let kind = null
@@ -325,7 +303,6 @@ export const storageKind = () => kind
 export async function openStorage({ mongoUri = mongoUriFrom(), path = DB_PATH, hosted = bloxity.hosted } = {}) {
   store = mongoUri ? await openMongo(mongoUri) : await openSqlite(path)
   kind = mongoUri ? 'mongo' : 'sqlite'
-  stock = await store.stock()
   setSaveTicketSecret(await store.secret())
   console.log(`[db] using ${mongoUri ? 'MongoDB' : `SQLite at ${path}`}`)
   if (hosted && !mongoUri) {
@@ -414,30 +391,6 @@ export const claimGemGrant = (transactionId, by) => store.claimGem(transactionId
 /** Gives back a claim whose player left before the grant could be applied. */
 export const releaseGemGrant = (transactionId, by) => store.releaseGem(transactionId, by)
 
-/** Top `limit` players per board: `{ rebirths: [{ name, value }], ... }`. */
+/** Top `limit` players per board: `{ deliveries: [{ name, value }], ... }`. */
 export const topPlayers = (limit = 10) => store.top(limit)
 
-export const getSphinxStock = () => stock
-
-/**
- * Takes one Sphinx. Synchronous for the purchase rules: decided on the stock known
- * here, then made permanent in the database, which has the final say (another pod may
- * have sold the last one a moment ago). Returns false when sold out.
- */
-export function takeSphinx() {
-  if (stock <= 0) return false
-  stock -= 1
-  store
-    .take()
-    .then((left) => {
-      stock = left ?? 0
-    })
-    .catch((err) => console.error('[db] sphinx stock update failed', err))
-  return true
-}
-
-/** Re-reads the stock, so sales on other pods show up here. */
-export async function refreshStock() {
-  stock = await store.stock()
-  return stock
-}

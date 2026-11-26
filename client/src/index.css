@@ -41,6 +41,8 @@
 /* The stick's resting spot and the jump button (TouchControls.jsx). */
 .touch-joy-rest {
   top: calc(100% - 129px - var(--px) * 190);
+  /* Landscape: right of the menu tiles, so a thumb on the stick never lands on them. */
+  left: calc(var(--px) * 170 + 40px);
 }
 .touch-jump {
   right: 14px;
@@ -67,6 +69,7 @@
   }
   .touch-joy-rest {
     top: calc(100% - 129px - var(--px) * 230);
+    left: 56px;
   }
   .touch-jump {
     bottom: calc(14px + var(--px) * 230);
@@ -101,6 +104,11 @@ canvas {
   display: inline-block;
   font-family: 'Fredoka One', 'Arial Rounded MT Bold', system-ui, sans-serif;
   white-space: nowrap;
+}
+/* Outlined text that may wrap onto more lines (long hints, on narrow phone screens). */
+.pp-text.pp-text-wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .pp-text-stroke {
   position: absolute;

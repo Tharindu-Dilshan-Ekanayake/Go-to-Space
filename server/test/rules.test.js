@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { DESTINATIONS, LAUNCH_CYCLE_MS, msToLaunch, refillCost, suitById, tankById, TRIP_MS } from '../../shared/balance.js'
+import { DESTINATIONS, GEM_PRODUCTS, LAUNCH_CYCLE_MS, msToLaunch, refillCost, SUIT_FAIL_MS, suitById, tankById, TRIP_MS } from '../../shared/balance.js'
 import { formatNumber } from '../../shared/format.js'
 import {
   applyAdReward,
@@ -9,6 +9,7 @@ import {
   bestReward,
   buySuit,
   cargoPlaces,
+  buyProduct,
   createProfile,
   createSession,
   deliverPackage,
@@ -89,7 +90,7 @@ test('unlocking a destination costs Money and opens new routes', () => {
   assert.equal(unlockDestination(p, 'mars').ok, false, 'only once')
 })
 
-test('suits are bought with Money and put straight on; Gems-only suits are not for sale', () => {
+test('suits are bought with Money and put straight on - Solar Gold too, when you can afford it', () => {
   const p = createProfile('a', 'A')
   p.money = 300
   assert.equal(buySuit(p, 'scout').ok, true)
@@ -98,16 +99,20 @@ test('suits are bought with Money and put straight on; Gems-only suits are not f
   assert.equal(buySuit(p, 'solar').ok, false)
 })
 
-test('Gems products grant passes and suits; a duplicate turns into Money', () => {
+test('nothing is sold for Gems: x2 Money and Solar Gold are bought with Money', () => {
   const p = createProfile('a', 'A')
-  assert.equal(applyGemProduct(p, 'money_x2').pass, 'moneyX2')
+  assert.equal(Object.keys(GEM_PRODUCTS).length, 0)
+  assert.equal(applyGemProduct(p, 'money_x2').ok, false, 'an old Gems sku grants nothing')
+  p.money = 250000
+  assert.equal(buyProduct(p, 'money_x2').ok, true)
+  assert.equal(p.money, 0)
+  assert.equal(p.passes.moneyX2, true)
+  assert.equal(buyProduct(p, 'money_x2').ok, false, 'once is enough')
   pickUpPackage(p, 'earth', () => 0)
   assert.equal(deliverPackage(p, 'moon').money, 80, 'x2 Money doubles pay')
-  const again = applyGemProduct(p, 'money_x2')
-  assert.ok(again.money > 0)
-  assert.equal(applyGemProduct(p, 'solar_suit').suit, 'solar')
+  p.money = suitById('solar').price
+  assert.equal(buySuit(p, 'solar').ok, true)
   assert.equal(p.suit, 'solar')
-  assert.equal(applyGemProduct(p, 'nope').ok, false)
 })
 
 test('ad rewards have a cooldown per placement', () => {
@@ -220,15 +225,16 @@ test('the beacon flies you back up, the pod takes you home', () => {
   assert.equal(p.location, 'earth')
 })
 
-test('the Star Map warps you only to places you have been', () => {
+test('there is no warping: even to a place you have been, every trip is flown', () => {
   const p = createProfile('a', 'A')
   const { session, events } = sessionAt(p, { x: 0, z: 30 })
   session.handle('travel', { to: 'moon', via: 'warp' }, 1_000)
   assert.equal(p.location, 'earth')
   assert.equal(events.at(-1).type, 'denied')
-  p.visited.push('moon')
+  p.visited.push('moon', 'station')
   session.handle('travel', { to: 'moon', via: 'warp' }, 1_100)
-  assert.equal(p.location, 'moon')
+  session.handle('travel', { to: 'station', via: 'warp' }, 1_200)
+  assert.equal(p.location, 'earth')
 })
 
 test('suits can only be bought at the Suit Shop', () => {
@@ -354,4 +360,73 @@ test('a planet safe room has air: oxygen refills inside it', () => {
   const out = sessionAt(profile, { x: 0, y: 0, z: 18 })
   out.session.tick(5, 3_000)
   assert.ok(profile.oxygen < tankById('starter').seconds)
+})
+
+test('a planet kills a suit too weak for it: back to the Earth lobby, package kept', () => {
+  const profile = createProfile('weak', 'Weak')
+  profile.ownedSuits = ['rookie', 'scout']
+  profile.suit = 'rookie'
+  profile.unlocked = ['moon', 'mars', 'venus']
+  profile.location = 'station'
+  profile.package = { from: 'earth', to: 'venus', reward: 220 }
+  const pos = { ...zone('station', 'bay:venus') }
+  const { session, events } = sessionAt(profile, pos)
+  session.handle('travel', { to: 'venus', via: 'shuttle' }, 1_000)
+  assert.equal(session.trip?.to, 'venus')
+  assert.ok(events.some((e) => e.type === 'suitWarning' && e.payload.need === 'Scout'))
+  session.tick(0.1, 1_000 + TRIP_MS.shuttle + 1)
+  assert.equal(profile.location, 'venus')
+  assert.ok(events.some((e) => e.type === 'suitFailing'))
+  session.tick(0.1, 1_000 + TRIP_MS.shuttle + SUIT_FAIL_MS + 10)
+  assert.equal(profile.location, 'earth')
+  assert.ok(events.some((e) => e.type === 'died'))
+  assert.ok(profile.package, 'the package survives')
+})
+
+test('putting on a good enough suit in time saves you', () => {
+  const profile = createProfile('swap', 'Swap')
+  profile.ownedSuits = ['rookie', 'scout']
+  profile.suit = 'rookie'
+  profile.unlocked = ['moon', 'venus']
+  profile.location = 'station'
+  const { session, events } = sessionAt(profile, { ...zone('station', 'bay:venus') })
+  session.handle('travel', { to: 'venus', via: 'shuttle' }, 1_000)
+  session.tick(0.1, 1_000 + TRIP_MS.shuttle + 1)
+  session.handle('equipSuit', { id: 'scout' }, 1_000 + TRIP_MS.shuttle + 100)
+  session.tick(0.1, 1_000 + TRIP_MS.shuttle + SUIT_FAIL_MS + 10)
+  assert.equal(profile.location, 'venus')
+  assert.ok(events.some((e) => e.type === 'suitOk'))
+})
+
+test('the first-time guide follows the first round trip, step by step', () => {
+  const p = createProfile('new', 'New')
+  assert.equal(p.guide, 0)
+  const pos = { ...zone('earth', 'suits') }
+  const { session } = sessionAt(p, pos, LAUNCH_CYCLE_MS - 50)
+  session.handle('buySuit', { id: 'rookie' }, LAUNCH_CYCLE_MS - 40)
+  assert.equal(p.guide, 1)
+  Object.assign(pos, zone('earth', 'cargo'))
+  session.handle('cargo', {}, LAUNCH_CYCLE_MS - 30)
+  assert.equal(p.guide, 2)
+  Object.assign(pos, zone('earth', 'boarding'))
+  session.tick(0.1, LAUNCH_CYCLE_MS + 10)
+  assert.equal(p.guide, 3)
+  let t = LAUNCH_CYCLE_MS + TRIP_MS.rocket + 20
+  session.tick(0.1, t)
+  Object.assign(pos, zone('station', 'bay:moon'))
+  session.handle('travel', { to: 'moon', via: 'shuttle' }, t + 1)
+  assert.equal(p.guide, 4)
+  t += TRIP_MS.shuttle + 10
+  session.tick(0.1, t)
+  Object.assign(pos, zone('moon', 'cargo'))
+  session.handle('cargo', {}, t + 1)
+  assert.equal(p.guide, 5)
+  Object.assign(pos, zone('moon', 'beacon'))
+  session.handle('travel', { to: 'station', via: 'shuttle' }, t + 2)
+  assert.equal(p.guide, 6)
+  t += TRIP_MS.shuttle + 10
+  session.tick(0.1, t)
+  Object.assign(pos, zone('station', 'pod'))
+  session.handle('travel', { to: 'earth', via: 'pod' }, t + 1)
+  assert.equal(p.guide, 7)
 })

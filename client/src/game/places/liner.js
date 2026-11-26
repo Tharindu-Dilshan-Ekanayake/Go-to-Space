@@ -197,17 +197,17 @@ export function addSpaceliner(c, { color = '#f3f5f8', accent = '#2f6fe0' } = {})
   }
 
   // Nav lights: red on the left wingtip, green on the right, white on the fin.
-  glow.add(GEO.sphere, {
+  glow.add(GEO.sphereLow, {
     position: [-6.62, -0.95, -3.1],
     scale: 0.16,
     color: '#ff3b3b',
   })
-  glow.add(GEO.sphere, {
+  glow.add(GEO.sphereLow, {
     position: [6.62, -0.95, -3.1],
     scale: 0.16,
     color: '#3bff6a',
   })
-  glow.add(GEO.sphere, {
+  glow.add(GEO.sphereLow, {
     position: [0.1, 3.95, -8.9],
     scale: 0.14,
     color: '#ffffff',

@@ -23,6 +23,8 @@ export const skyUniforms = {
   nebula: { value: START.nebula },
   /** Puffy fair-weather clouds near the horizon (0-1): Earth's sky. */
   cumulus: { value: START.cumulus },
+  /** Noise detail: 1, or 0 on LOW (Sky.jsx). */
+  detail: { value: 1 },
 }
 
 /** Sets the sky (and `fog`, if given) to `place`'s look. */

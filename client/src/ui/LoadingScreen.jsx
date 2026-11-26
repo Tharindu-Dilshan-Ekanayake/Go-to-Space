@@ -76,12 +76,12 @@ export function LoadingScreen({ done }) {
       <h1 className="m-0 flex flex-col items-center text-center leading-none" style={{ transform: 'rotate(-3deg)' }}>
         <span style={{ fontSize: 'clamp(30px, 7vw, 72px)' }}>
           <StrokeText stroke="0.16em" gradient="linear-gradient(180deg, #ffffff 0%, #ffffff 55%, #bfe6ff 56%, #6fb7ff 100%)">
-            Orbit
+           Go to
           </StrokeText>
         </span>
         <span style={{ fontSize: 'clamp(44px, 10vw, 118px)', marginTop: '-0.08em' }}>
           <StrokeText stroke="0.15em" gradient="linear-gradient(180deg, #fffaa8 0%, #ffd52a 45%, #ff9c00 100%)">
-            Express
+            Space
           </StrokeText>
         </span>
         <span className="text-base md:text-xl" style={{ marginTop: '0.4em' }}>

@@ -50,7 +50,7 @@ test('Boxity URLs come only from the environment: none written down', () => {
   assert.equal(local.portalUrl, null)
   assert.equal(local.staticUrl, null)
   assert.equal(local.playHost, '')
-  assert.equal(local.gameSlug, '1-sword-throwing')
+  assert.equal(local.gameSlug, 'go-to-space')
   assert.equal(local.hosted, false)
   assert.equal(hosted.apiUrl, 'https://api.stage.example', 'trailing slash trimmed')
   assert.equal(hosted.gameSlug, 'tire')
@@ -167,10 +167,8 @@ test('the webhook secret must match exactly when one is set', () => {
   assert.equal(webhookSecretOk(undefined, 's3cret'), false)
 })
 
-test('webhook bodies are checked: known sku, ids, legion_ prefix stripped', () => {
-  const ok = parseGemWebhook({ transactionId: 't1', userId: 'legion_acc1', sku: 'money_small', productPrice: 50 })
-  assert.equal(ok.ok, true)
-  assert.equal(ok.grant.userId, 'acc1')
+test('webhook bodies are checked: nothing is sold for Gems, so every sku is refused', () => {
+  assert.equal(parseGemWebhook({ transactionId: 't1', userId: 'legion_acc1', sku: 'money_small', productPrice: 50 }).status, 400)
   assert.equal(profileIdOf('acc2'), 'acc2')
   assert.equal(parseGemWebhook({ transactionId: 't1', userId: 'acc1', sku: 'nope' }).status, 400)
   assert.equal(parseGemWebhook({ userId: 'acc1', sku: 'money_small' }).status, 400)
@@ -206,10 +204,8 @@ test('the webhook route records grants and answers fast', async () => {
   try {
     const body = { transactionId: 'txn-w', userId: 'legion_acc9', sku: 'money_big' }
     assert.equal(await call(body, 'wrong'), 401)
-    assert.equal(await call(body, 'hook'), 200)
-    assert.equal(await call(body, 'hook'), 200, 'duplicates are fine')
-    assert.equal(await call({ ...body, transactionId: 'txn-x', sku: 'nope' }, 'hook'), 400)
-    assert.deepEqual(await pendingGemGrants(['acc9']), [{ transactionId: 'txn-w', userId: 'acc9', sku: 'money_big' }])
+    assert.equal(await call(body, 'hook'), 400, 'no Gems products: an old sku is refused')
+    assert.deepEqual(await pendingGemGrants(['acc9']), [])
   } finally {
     delete process.env.LEGION_WEBHOOK_SECRET
   }
@@ -224,9 +220,9 @@ test('a pod applies grants to the verified players it holds, exactly once', asyn
   try {
     await recordGemGrant({ transactionId: 'txn-5', userId: 'acc5', sku: 'money_x2' })
     await Promise.all([applyGemsFor(['acc5']), applyGemsFor(['acc5'])])
-    assert.equal(profile.passes.moneyX2, true)
-    assert.equal(profile.money, 0, 'applied once, not turned into Money by a second copy')
-    assert.equal((await loadProfile('acc5', 'Five', 'test')).passes.moneyX2, true, 'saved')
+    // A grant left over from when Gems were sold: consumed, granting nothing.
+    assert.equal(Boolean(profile.passes.moneyX2), false)
+    assert.equal(profile.money, 0)
     assert.deepEqual(await pendingGemGrants(['acc5']), [])
   } finally {
     activePlayers.delete('acc5')

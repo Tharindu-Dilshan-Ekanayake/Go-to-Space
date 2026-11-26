@@ -1,4 +1,4 @@
-import { BoxGeometry, CylinderGeometry, Group, Mesh, MeshBasicMaterial, MeshLambertMaterial, SphereGeometry, TorusGeometry } from 'three'
+import { BoxGeometry, CylinderGeometry, DoubleSide, Euler, Group, Mesh, MeshBasicMaterial, MeshLambertMaterial, Quaternion, SphereGeometry, TorusGeometry, Vector3 } from 'three'
 
 import { SUITS, suitById } from '@shared/balance'
 
@@ -40,19 +40,31 @@ const tank = new CylinderGeometry(0.09, 0.09, 1, 12)
 const cap = new SphereGeometry(0.09, 10, 6)
 const nozzle = new CylinderGeometry(0.075, 0.12, 0.2, 12)
 const collar = new TorusGeometry(0.27, 0.06, 8, 24)
-const band = new TorusGeometry(HELMET_RADIUS + 0.012, 0.035, 6, 28, Math.PI)
+const band = new TorusGeometry(HELMET_RADIUS + 0.045, 0.03, 6, 28, Math.PI)
+/**
+ * The helmet's shell: a sphere round the glass, open at the front in a wide face window
+ * (WINDOW radians across, centred on +Z), and open underneath where the neck ring is.
+ */
+const WINDOW = 2.3
+const SHELL_PHI = Math.PI / 2 + WINDOW / 2
+const helmetShell = new SphereGeometry(HELMET_RADIUS + 0.03, 22, 12, SHELL_PHI, Math.PI * 2 - WINDOW, 0, Math.PI * 0.8)
+/** The face window's frame: an arc up each edge (rotated to its meridian), and a brow. */
+const windowRim = new TorusGeometry(HELMET_RADIUS + 0.035, 0.035, 6, 24, Math.PI * 0.78)
+windowRim.rotateZ(-Math.PI * 0.28)
+const hose = new CylinderGeometry(0.035, 0.035, 1, 8)
 const pad = new SphereGeometry(1, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2)
+const disc = new CylinderGeometry(1, 1, 1, 18)
 const ear = new CylinderGeometry(0.1, 0.1, 0.08, 14)
 const rod = new CylinderGeometry(0.012, 0.012, 1, 5)
 const dot = new SphereGeometry(1, 8, 6)
-const dome = new SphereGeometry(HELMET_RADIUS, 22, 14)
+const dome = new SphereGeometry(HELMET_RADIUS, 18, 12)
 
 let materials = null
 /** The three shared materials, made on first use. */
 function suitMaterials() {
   if (!materials) {
     materials = {
-      solid: new MeshLambertMaterial({ vertexColors: true }),
+      solid: new MeshLambertMaterial({ vertexColors: true, side: DoubleSide }),
       glow: new MeshBasicMaterial({ vertexColors: true, toneMapped: false }),
       glass: new MeshLambertMaterial({
         vertexColors: true,
@@ -74,6 +86,19 @@ const WINGED = new Set(['quasar', 'galaxy', 'solar'])
 const ANTENNA = 2
 const HEADLAMP = 4
 const FINS = 6
+
+const _dir = new Vector3()
+const _q = new Quaternion()
+const _e = new Euler()
+const _up = new Vector3(0, 1, 0)
+/** A hose segment from `a` to `b` ([x, y, z], upper-body space): position, rotation, length. */
+function between(a, b) {
+  _dir.set(b[0] - a[0], b[1] - a[1], b[2] - a[2])
+  const length = _dir.length()
+  _q.setFromUnitVectors(_up, _dir.normalize())
+  _e.setFromQuaternion(_q)
+  return { position: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], rotation: [_e.x, _e.y, _e.z], scale: [1, length, 1] }
+}
 
 const cache = new Map()
 
@@ -178,6 +203,9 @@ function suitGeometry(suitId, carrying) {
     scale: [0.6, 0.05, 0.01],
     color: accent,
   })
+  // The emblem: a glowing disc in an accent ring, high on the left of the chest.
+  s.add(disc, { position: [-0.17, y(1.2), front + 0.045], rotation: [Math.PI / 2, 0, 0], scale: [0.085, 0.012, 0.085], color: accent })
+  g.add(disc, { position: [-0.17, y(1.2), front + 0.053], rotation: [Math.PI / 2, 0, 0], scale: [0.06, 0.006, 0.06], color: visor })
   s.add(box, {
     position: [0.13, y(1.12), front + 0.045],
     scale: [0.22, 0.13, 0.02],
@@ -251,16 +279,28 @@ function suitGeometry(suitId, carrying) {
     rotation: [Math.PI / 2, 0, 0],
     color: main,
   })
+  s.add(helmetShell, { position: [0, hy, hz], color: main })
+  for (const phi of [Math.PI / 2 - WINDOW / 2, Math.PI / 2 + WINDOW / 2]) {
+    s.add(windowRim, { position: [0, hy, hz], rotation: [0, Math.PI + phi, 0], color: accent })
+  }
   s.add(band, { position: [0, hy, hz], color: accent })
+  // Two air hoses from the top of the pack to the back of the helmet.
+  for (const side of [-1, 1]) {
+    const start = [side * 0.17, py + PACK.h / 2 - 0.02, pz - 0.02]
+    const bend = [side * 0.24, hy - 0.42, -0.34]
+    const end = [side * 0.2, hy - 0.22, hz - 0.36]
+    s.add(hose, { ...between(start, bend), color: '#3a3f4a' })
+    s.add(hose, { ...between(bend, end), color: '#3a3f4a' })
+  }
   for (const side of [-1, 1]) {
     s.add(ear, {
-      position: [side * (HELMET_RADIUS + 0.02), hy, hz],
+      position: [side * (HELMET_RADIUS + 0.05), hy, hz],
       rotation: [0, 0, Math.PI / 2],
-      color: main,
+      color: accent,
     })
   }
   g.add(dot, {
-    position: [HELMET_RADIUS + 0.065, hy, hz],
+    position: [HELMET_RADIUS + 0.095, hy, hz],
     scale: 0.035,
     color: '#3aff8a',
   })

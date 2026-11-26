@@ -65,6 +65,11 @@ Gameplay banners are **off** (no `show: true`); turning them on is the developer
 
 ## Gems purchases
 
+**The game sells nothing for Gems** (`GEM_PRODUCTS` in shared/balance.js is empty).
+Everything is bought with in-game Money: suits, oxygen tanks, and the Store's x2 Money
+pass (`MONEY_PRODUCTS`). No Gems products should be listed in the Boxity catalog. The
+plumbing below stays in place but has nothing to grant: every sku is answered 400.
+
 Boxity's purchase webhook goes to `POST /api/gems/webhook` on the game server. It is
 recorded in the database by `transactionId` (idempotent) and applied exactly once by
 the pod the buyer plays on. Unknown skus are answered 400 so Boxity refunds them.
@@ -109,7 +114,7 @@ by `characterAccessoryMatrix`; on any failure the regular avatar shows.
 |-------------------------|---------------------------------------------------------------|
 | `BLOXITY_REPORT_TOKEN`  | Token for leaderboard and room reports (none set = no reports) |
 | `MATCHMAKER_REPORT_URL` | Where the Open Rooms reporter posts (injected by Boxity hosting) |
-| `BLOXITY_GAME_ID`       | Hosted game id for reports (default `1-sword-throwing`, the slug this game is registered under) |
+| `BLOXITY_GAME_ID`       | Hosted game id for reports (default `go-to-space`, the slug this game is registered under) |
 | `LEGION_WEBHOOK_SECRET` | Must match the webhook's `x-legion-webhook-secret` header     |
 | `MONGODB_URI`           | Shared database for profiles, Gems grants and the save-ticket secret. Required when hosted: without it saves go to a file inside the pod and are lost on every redeploy (the server logs an error and `/api/health` shows `db: "sqlite"`) |
 | `BLOXITY_API_URL` etc.  | Platform URLs, injected by Boxity hosting; no defaults are written in code (`server/src/bloxityEnv.js`) |

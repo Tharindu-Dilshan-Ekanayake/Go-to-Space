@@ -51,6 +51,8 @@ export function Panel({ title, icon, width = 920, children, footer, onClose }) {
   const close = onClose || closePanel
   // Long titles shrink to stay clear of the close button.
   const titleSize = Math.min(92, (width - 190) / (title.length * 0.62))
+  // ...and on a narrow phone, where the panel shrinks to the screen, shrink with it.
+  const titleFont = `min(${u(titleSize)}, calc((100vw - ${u(250)} - 16px) / ${(title.length * 0.62 + (icon ? 1.6 : 0)).toFixed(2)}))`
 
   useEffect(() => {
     const onKey = (e) => {
@@ -87,9 +89,9 @@ export function Panel({ title, icon, width = 920, children, footer, onClose }) {
         >
           {children}
         </div>
-        <div className="absolute flex items-center leading-none" style={{ left: u(icon ? 10 : 60), top: u(8 + (92 - titleSize) * 0.6), fontSize: u(titleSize), gap: u(8) }}>
-          {icon && <Icon name={icon} size={u(titleSize * 1.4)} style={{ marginTop: u(-titleSize * 0.3) }} />}
-          <StrokeText stroke={u(titleSize * 0.17)}>{title}</StrokeText>
+        <div className="absolute flex items-center leading-none" style={{ left: u(icon ? 10 : 60), top: u(8 + (92 - titleSize) * 0.6), fontSize: titleFont, gap: u(8) }}>
+          {icon && <Icon name={icon} size={`calc(${titleFont} * 1.4)`} style={{ marginTop: `calc(${titleFont} * -0.3)` }} />}
+          <StrokeText stroke={`calc(${titleFont} * 0.17)`}>{title}</StrokeText>
         </div>
         <CloseButton onClick={close} style={{ right: u(-24), top: u(20) }} />
         {footer}

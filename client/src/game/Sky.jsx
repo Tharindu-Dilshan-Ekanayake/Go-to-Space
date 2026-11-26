@@ -34,6 +34,8 @@ const skyFragmentShader = /* glsl */ `
   uniform float stars;
   uniform float nebula;
   uniform float cumulus;
+  /** 1 = every layer of noise; 0 (LOW) = skip the finest ones. */
+  uniform float detail;
 
   varying vec3 vDirection;
 
@@ -71,7 +73,7 @@ const skyFragmentShader = /* glsl */ `
     // soft grey in their thick middles, thinning out overhead.
     if (cumulus > 0.0 && h > -0.02) {
       vec2 cp = dir.xz / (h + 0.12) * 0.55;
-      float cn = skyNoise(cp + vec2(5.2, 1.3)) * 0.5 + skyNoise(cp * 2.1 + 7.0) * 0.3 + skyNoise(cp * 4.3 + 2.0) * 0.2;
+      float cn = skyNoise(cp + vec2(5.2, 1.3)) * 0.5 + skyNoise(cp * 2.1 + 7.0) * 0.3 + (detail > 0.5 ? skyNoise(cp * 4.3 + 2.0) * 0.2 : 0.1);
       float cband = smoothstep(0.0, 0.06, h) * (1.0 - smoothstep(0.3, 0.55, h));
       float cloud = smoothstep(0.5, 0.66, cn) * cband;
       float dense = smoothstep(0.62, 0.85, cn);
@@ -95,7 +97,7 @@ const skyFragmentShader = /* glsl */ `
       float across = dot(dir, axis);
       float band = exp(-pow(across / 0.24, 2.0));
       vec2 q = vec2(atan(dir.z, dir.x) * 2.6, across * 7.0);
-      float cloud = skyNoise(q * 2.2) * 0.6 + skyNoise(q * 5.7 + 3.0) * 0.4;
+      float cloud = skyNoise(q * 2.2) * 0.6 + (detail > 0.5 ? skyNoise(q * 5.7 + 3.0) * 0.4 : 0.2);
       vec3 tint = mix(vec3(0.32, 0.26, 0.72), vec3(0.95, 0.55, 0.78), skyNoise(q * 1.1 + 9.0));
       color += tint * band * cloud * cloud * 0.55 * nebula;
       color += vec3(1.0, 0.95, 0.85) * exp(-pow(across / 0.07, 2.0)) * cloud * 0.12 * nebula;
@@ -127,6 +129,11 @@ export function Sky() {
     [],
   )
   useEffect(() => () => material.dispose(), [material])
+  // LOW skips the sky's finest noise layers: it's drawn over every pixel of the screen.
+  const low = useQuality((s) => s.level === 'LOW')
+  useEffect(() => {
+    skyUniforms.detail.value = low ? 0 : 1
+  }, [low])
 
   useFrame(() => {
     ref.current?.position.copy(camera.position)

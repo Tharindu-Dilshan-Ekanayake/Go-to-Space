@@ -1,4 +1,4 @@
-import { destinationById, DESTINATIONS, EARTH, STATION } from '@shared/balance'
+import { destinationById, DESTINATIONS, EARTH, STATION, suitById, suitSurvives } from '@shared/balance'
 import { formatNumber } from '@shared/format'
 import { isUnlocked } from '@shared/logic'
 import { BAYS, EARTH_BOARD, groundHeightAt, jetPad, jetsOf, LAUNCH_PAD, layoutOf, ORRERY, SAFE_ROOM, SUIT_SHOP } from '@shared/world'
@@ -71,6 +71,7 @@ export function placeLabels(place, profile) {
             open
               ? { text: `$${formatNumber(dest.reward)} a delivery`, size: 30, fill: '#ffffff' }
               : { text: `LOCKED  $${formatNumber(dest.cost)}`, size: 34, gradient: TEXT.red },
+            { text: `${suitById(dest.minSuit).name.toUpperCase()} SUIT OR BETTER`, size: 24, fill: suitSurvives(profile.suit, bay.id) ? '#bfffc4' : '#ffb0a8' },
           ],
           pxPerUnit: 92,
         }

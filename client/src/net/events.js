@@ -5,7 +5,7 @@ import { arrivalPoint } from '@shared/session'
 import { sfx } from '../audio/sfx'
 import { burst } from '../game/fx/fxQueue'
 import { runtime } from '../game/runtime'
-import { getGame } from '../store/game'
+import { getGame, useGame } from '../store/game'
 import { fadeThrough } from '../ui/fade'
 import { refreshRemotePlaces } from './remotePlayers'
 
@@ -45,6 +45,7 @@ export function handleServerEvent(type, payload) {
     case 'trip': {
       // Off you go: the flight scene takes over until 'arrive'.
       runtime.player.frozen = true
+      useGame.setState({ hazard: null })
       game.closePanel()
       game.setTrip({ ...payload, startedAt: performance.now() })
       refreshRemotePlaces()
@@ -100,6 +101,35 @@ export function handleServerEvent(type, payload) {
         sfx.buy()
         burst({ ...atPlayer(1.6), count: 30, palette: 'confetti', speed: 6 })
         game.showToast(payload.tank ? 'NEW OXYGEN TANK!' : 'OXYGEN REFILLED', 'info')
+      }
+      break
+
+    case 'suitWarning':
+      sfx.error()
+      game.showToast(`Your suit is too weak for ${(PLACE_NAMES[payload.place] || payload.place).toUpperCase()}! You need ${payload.need} or better`, 'bad')
+      break
+
+    case 'suitFailing':
+      sfx.error()
+      useGame.setState({ hazard: { need: payload.need, until: performance.now() + (payload.ms || 5000) } })
+      break
+
+    case 'suitOk':
+      useGame.setState({ hazard: null })
+      game.showToast('Suit holding - you are safe', 'info')
+      break
+
+    case 'died':
+      useGame.setState({ hazard: null })
+      sfx.error()
+      setTimeout(() => getGame().showToast('YOUR SUIT FAILED! You woke up back on Earth', 'bad'), 700)
+      break
+
+    case 'guide':
+      sfx.badge()
+      if (payload.done) {
+        burst({ ...atPlayer(2), count: 80, palette: 'confetti', speed: 9 })
+        setTimeout(() => getGame().showToast('GUIDE COMPLETE! You are a space courier now', 'good'), 1200)
       }
       break
 

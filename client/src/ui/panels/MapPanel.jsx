@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 
-import { DESTINATIONS, EARTH, PLACE_NAMES, STATION } from '@shared/balance'
+import { DESTINATIONS, EARTH, PLACE_NAMES, STATION, suitById, suitSurvives } from '@shared/balance'
 import { formatNumber } from '@shared/format'
 import { isUnlocked, payMultiplier } from '@shared/logic'
 
@@ -42,29 +42,19 @@ const HUBS = [
 
 /**
  * The Star Map: every place in the game. Unlock destinations with Money (each pays more
- * per delivery than the last), and warp straight to anywhere you've already been. Opened
+ * per delivery than the last). There's no warping: every trip is flown. Opened
  * from the menu, the console on Earth, or by walking into a locked shuttle bay (which
  * scrolls to that destination).
  */
 export function MapPanel() {
   const profile = useGame((s) => s.profile)
   const focus = useGame((s) => s.panelData?.focus ?? null)
-  const travelling = useGame((s) => s.trip !== null)
   const focusRef = useRef(null)
   const mult = payMultiplier(profile)
 
   useEffect(() => {
     focusRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }, [focus])
-
-  const warp = (id) => {
-    if (profile.location === id || travelling) return
-    if (!profile.visited.includes(id)) {
-      sfx.error()
-      return
-    }
-    actions.travel(id, 'warp')
-  }
 
   const unlock = (dest) => {
     if (profile.money < dest.cost) {
@@ -77,14 +67,13 @@ export function MapPanel() {
   return (
     <Panel title="STAR MAP" icon="portal" width={1120}>
       <p className="m-0 text-center" style={{ fontSize: u(24), marginBottom: u(12), color: '#cfd8e6', fontFamily: 'system-ui, sans-serif' }}>
-        Unlock destinations to send packages further for more Money. Warp anywhere you have been before.
+        Unlock destinations to send packages further for more Money. Then fly there: the rocket to Halo Station, and its shuttles on to every planet.
       </p>
       <div className="flex flex-col" style={{ gap: u(10) }}>
         {[...HUBS.map((h) => ({ ...h, hub: true })), ...DESTINATIONS].map((place) => {
           const dest = place.hub ? null : place
           const open = place.hub || isUnlocked(profile, place.id)
           const here = profile.location === place.id
-          const been = profile.visited.includes(place.id)
           const color = dest ? dest.look.planet : place.color
           const focused = focus === place.id
           return (
@@ -112,6 +101,7 @@ export function MapPanel() {
                   <span style={{ fontSize: u(24), marginTop: u(2) }}>
                     <span style={{ color: '#8dff4f' }}>{`$${formatNumber(Math.round(dest.reward * mult))} a delivery`}</span>
                     <span style={{ color: '#9fb4d8' }}>{`  ·  gravity ${Math.round(dest.gravity * 100)}%`}</span>
+                    <span style={{ color: suitSurvives(profile.suit, dest.id) ? '#8dff4f' : '#ff7a6a' }}>{`  ·  needs ${suitById(dest.minSuit).name} suit+`}</span>
                   </span>
                 )}
               </div>
@@ -124,15 +114,9 @@ export function MapPanel() {
                   </ChunkyButton>
                 )}
                 {open && (
-                  <ChunkyButton
-                    gradient={here ? GRADIENTS.greyButton : been ? GRADIENTS.blueButton : GRADIENTS.slate}
-                    disabled={here || travelling}
-                    onClick={() => warp(place.id)}
-                    title="Warp"
-                    style={{ width: u(240), height: u(70) }}
-                  >
-                    <span style={{ fontSize: u(here || been ? 30 : 22), lineHeight: 1.05 }} className="text-center">
-                      <StrokeText stroke={u(6)}>{here ? 'You are here' : been ? 'Warp' : 'Fly from Halo Station first'}</StrokeText>
+                  <ChunkyButton gradient={here ? GRADIENTS.blueButton : GRADIENTS.greyButton} disabled style={{ width: u(240), height: u(70) }}>
+                    <span style={{ fontSize: u(here ? 30 : 28), lineHeight: 1.05 }} className="text-center">
+                      <StrokeText stroke={u(6)}>{here ? 'You are here' : place.hub ? 'Open' : 'Unlocked'}</StrokeText>
                     </span>
                   </ChunkyButton>
                 )}

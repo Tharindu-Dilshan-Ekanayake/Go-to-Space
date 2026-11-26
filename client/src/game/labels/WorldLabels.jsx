@@ -18,6 +18,8 @@ export function WorldLabels() {
   const playable = useGame((s) => s.playable)
   const place = useScenePlace()
   const unlocked = useGame((s) => s.profile.unlocked.length)
+  // The bay screens say whether your suit is good enough: redrawn when you change it.
+  const suit = useGame((s) => s.profile.suit)
   const gl = useThree((s) => s.gl)
   const camera = useThree((s) => s.camera)
   const scene = useThree((s) => s.scene)
@@ -55,7 +57,7 @@ export function WorldLabels() {
       if (getActiveLabelBatch() === next) setActiveLabelBatch(null)
       next.dispose()
     }
-  }, [playable, place, unlocked, gl, camera, scene])
+  }, [playable, place, unlocked, suit, gl, camera, scene])
 
   useEffect(() => {
     batch?.setMaxDistance(maxDistance)

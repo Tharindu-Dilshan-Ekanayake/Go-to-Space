@@ -27,7 +27,9 @@ export const GEO = {
   cylinderLow: new CylinderGeometry(1, 1, 1, 8),
   cone: new ConeGeometry(1, 1, 16),
   coneLow: new ConeGeometry(1, 1, 7),
-  sphere: new SphereGeometry(1, 16, 10),
+  sphere: new SphereGeometry(1, 12, 8),
+  /** For tiny things - lights, beacons, knobs - where facets never show. */
+  sphereLow: new SphereGeometry(1, 8, 6),
   ring: new TorusGeometry(1, 0.08, 6, 32),
   /** A big ring with a fat tube (the station's habitat wheel). */
   ringThick: new TorusGeometry(1, 0.06, 10, 72),

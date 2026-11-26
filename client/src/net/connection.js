@@ -63,7 +63,7 @@ async function findDevServer() {
   for (const port of DEV_PORTS) candidates.push(`${window.location.protocol}//${window.location.hostname}:${port}`)
   for (const url of new Set(candidates)) {
     const health = await healthOf(url)
-    if (health?.ok && health.game === '1-sword-throwing') return url
+    if (health?.ok && health.game === 'go-to-space') return url
   }
   return null
 }

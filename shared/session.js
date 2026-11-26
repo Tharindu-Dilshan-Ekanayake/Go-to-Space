@@ -1,4 +1,4 @@
-import { breathable, destinationById, EARTH, lastLaunchAt, PLACE_NAMES, STATION, TRIP_MS } from './balance.js'
+import { breathable, destinationById, EARTH, GUIDE_STEPS, lastLaunchAt, PLACE_NAMES, STATION, SUIT_FAIL_MS, suitById, suitSurvives, TRIP_MS } from './balance.js'
 import {
   applyAdReward,
   applyGemProduct,
@@ -13,6 +13,7 @@ import {
   pickUpPackage,
   unlockDestination,
   visit,
+  buyProduct,
   buyTank,
   oxygenCapacity,
   refillOxygen,
@@ -63,6 +64,8 @@ export class PlayerSession {
     this.rand = rand
     /** The trip under way: `{ from, to, via, arriveAt }`, or null. */
     this.trip = null
+    /** A suit too weak for where you are: `{ failAt }` - you die then, unless you leave. */
+    this.hazard = null
     /** When the last tick ran (rocket launches between two ticks are caught). */
     this.lastTickAt = now
     this.dirty = false
@@ -91,6 +94,14 @@ export class PlayerSession {
 
   deny(reason) {
     this.emit('denied', { reason })
+  }
+
+  /** The first-time guide moves on, if it's at step `from` (balance GUIDE_STEPS). */
+  advanceGuide(from) {
+    const profile = this.profile
+    if (profile.guide !== from) return
+    profile.guide = from + 1
+    this.emit('guide', { step: profile.guide, done: profile.guide >= GUIDE_STEPS.length })
   }
 
   checkBadges() {
@@ -134,6 +145,7 @@ export class PlayerSession {
         if (!this.at('suits')) return this.deny('Visit the Suit Shop on Earth')
         const result = buySuit(profile, String(data.id || ''))
         if (!result.ok) return this.deny(result.error)
+        this.advanceGuide(0)
         this.sendProfile()
         return
       }
@@ -154,6 +166,19 @@ export class PlayerSession {
         this.sendProfile()
         return
       }
+      case 'buyProduct': {
+        const result = buyProduct(profile, String(data.id || ''))
+        if (!result.ok) return this.deny(result.error)
+        this.emit('reward', { label: result.name })
+        this.sendProfile()
+        return
+      }
+      case 'skipGuide':
+        if (profile.guide < GUIDE_STEPS.length) {
+          profile.guide = GUIDE_STEPS.length
+          this.sendProfile()
+        }
+        return
       case 'equipSuit': {
         if (equipSuit(profile, String(data.id || '')).ok) this.sendProfile()
         return
@@ -172,9 +197,13 @@ export class PlayerSession {
       const delivered = deliverPackage(profile, place)
       if (!delivered.ok) return
       this.emit('delivered', delivered)
+      if (place === 'moon') this.advanceGuide(4)
     }
     const picked = pickUpPackage(profile, place, this.rand)
-    if (picked.ok) this.emit('picked', picked.package)
+    if (picked.ok) {
+      this.emit('picked', picked.package)
+      if (place === EARTH) this.advanceGuide(1)
+    }
     this.checkBadges()
     this.sendProfile()
   }
@@ -193,8 +222,8 @@ export class PlayerSession {
     if (!canBeAt(profile, to)) return this.deny('Unlock it on the Star Map first')
     let ok = false
     if (via === 'warp') {
-      ok = profile.visited.includes(to)
-      if (!ok) return this.deny(`Visit ${PLACE_NAMES[to] || to} once first, then you can warp there`)
+      // No warping: every trip is flown - the rocket, the shuttles, the pod.
+      return this.deny('No warping - fly there by rocket and shuttle')
     } else if (via === 'shuttle') {
       if (from === STATION && destinationById(to)) {
         ok = this.at(`bay:${to}`)
@@ -212,18 +241,34 @@ export class PlayerSession {
     const duration = TRIP_MS[via] ?? TRIP_MS.warp
     this.trip = { from, to, via, arriveAt: now + duration }
     this.profile.location = to
+    this.hazard = null
+    // The guide's travel steps: the rocket up, the Moon shuttle, the beacon back, the pod home.
+    if (via === 'rocket') this.advanceGuide(2)
+    else if (via === 'shuttle' && to === 'moon') this.advanceGuide(3)
+    else if (via === 'shuttle' && from === 'moon' && to === STATION) this.advanceGuide(5)
+    else if (via === 'pod') this.advanceGuide(6)
+    // Off somewhere your suit won't survive: say so before you get there.
+    if (!suitSurvives(this.profile.suit, to)) {
+      const need = suitById(destinationById(to).minSuit).name
+      this.emit('suitWarning', { place: to, need })
+    }
     if (via === 'rocket') this.profile.stats.launches += 1
     this.onTrip?.(to)
     this.emit('trip', { from, to, via, duration })
     this.sendProfile()
   }
 
-  arrive() {
+  arrive(now) {
     const place = this.trip.to
     this.trip = null
     const first = visit(this.profile, place)
     this.onArrive?.(place)
     this.emit('arrive', { place, first })
+    // A suit too weak for here starts failing: SUIT_FAIL_MS to get out (or change suit).
+    if (!suitSurvives(this.profile.suit, place)) {
+      this.hazard = { failAt: now + SUIT_FAIL_MS }
+      this.emit('suitFailing', { place, need: suitById(destinationById(place).minSuit).name, ms: SUIT_FAIL_MS })
+    }
     this.checkBadges()
     this.sendProfile()
   }
@@ -255,7 +300,8 @@ export class PlayerSession {
   tick(dt, now) {
     const profile = this.profile
     profile.stats.playtime += dt
-    if (this.trip && now >= this.trip.arriveAt) this.arrive()
+    if (this.trip && now >= this.trip.arriveAt) this.arrive(now)
+    this.checkHazard(now)
 
     // A launch since the last tick: everyone in the boarding ring rides it up.
     const launch = lastLaunchAt(now)
@@ -267,6 +313,27 @@ export class PlayerSession {
     this.lastTickAt = now
     this.breathe(dt, now)
     if (this.dirty) this.sendProfile()
+  }
+
+  /**
+   * A failing suit: fine again if you've changed into one that survives here; otherwise,
+   * when time's up, you die - and come round back in the Earth lobby (package and all).
+   */
+  checkHazard(now) {
+    if (!this.hazard || this.trip) return
+    const profile = this.profile
+    if (suitSurvives(profile.suit, profile.location)) {
+      this.hazard = null
+      this.emit('suitOk', {})
+      return
+    }
+    if (now < this.hazard.failAt) return
+    this.hazard = null
+    profile.location = EARTH
+    this.emit('died', { reason: 'suit' })
+    this.onArrive?.(EARTH)
+    this.emit('arrive', { place: EARTH, first: false })
+    this.sendProfile()
   }
 
   /**

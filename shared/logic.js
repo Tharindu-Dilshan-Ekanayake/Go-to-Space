@@ -5,6 +5,8 @@ import {
   destinationById,
   EARTH,
   GEM_PRODUCTS,
+  GUIDE_STEPS,
+  MONEY_PRODUCTS,
   isPlace,
   PASSES,
   OXYGEN_TANKS,
@@ -48,6 +50,8 @@ export function createProfile(id, name) {
     /** Your oxygen tank (balance OXYGEN_TANKS), and the seconds of air left in it. */
     tank: 'starter',
     oxygen: OXYGEN_TANKS[0].seconds,
+    /** First-time guide steps finished (balance GUIDE_STEPS; all of them: done). */
+    guide: 0,
     passes: {},
     badges: [],
     stats: {
@@ -74,6 +78,8 @@ export function normalizeProfile(raw, id, name) {
   p.visited = [...new Set([EARTH, ...(Array.isArray(raw.visited) ? raw.visited.filter(isPlace) : [])])]
   p.ownedSuits = [...new Set(Array.isArray(raw.ownedSuits) ? raw.ownedSuits.filter((s) => SUITS.some((x) => x.id === s)) : [])]
   p.suit = p.ownedSuits.includes(raw.suit) ? raw.suit : 'none'
+  // An old save without the guide: done if they've already delivered something.
+  p.guide = Number.isInteger(raw.guide) ? Math.min(GUIDE_STEPS.length, Math.max(0, raw.guide)) : (raw.stats?.deliveries ?? 0) > 0 ? GUIDE_STEPS.length : 0
   p.tank = OXYGEN_TANKS.some((t) => t.id === raw.tank) ? raw.tank : 'starter'
   p.oxygen = Number.isFinite(raw.oxygen) ? Math.min(oxygenCapacity(p), Math.max(0, raw.oxygen)) : oxygenCapacity(p)
   p.passes = Object.fromEntries(PASSES.filter((pass) => raw.passes?.[pass] === true).map((pass) => [pass, true]))
@@ -224,6 +230,18 @@ export function refillOxygen(profile, place) {
   profile.money -= cost
   profile.oxygen = capacity
   return { ok: true, cost }
+}
+
+/** Buys Store product `id` (MONEY_PRODUCTS) with Money. */
+export function buyProduct(profile, id) {
+  const product = MONEY_PRODUCTS[id]
+  if (!product) return { ok: false, error: 'Not for sale' }
+  const pass = product.grant?.pass
+  if (pass && profile.passes[pass]) return { ok: false, error: 'You have it already' }
+  if (profile.money < product.price) return { ok: false, error: 'Not enough Money' }
+  profile.money -= product.price
+  if (pass) profile.passes[pass] = true
+  return { ok: true, id, name: product.name }
 }
 
 export function equipSuit(profile, suitId) {

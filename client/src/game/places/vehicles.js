@@ -182,9 +182,9 @@ export function addSpaceplane(c, { scale = 1, color = '#f3f5f8', accent = '#2f6f
     glow.add(CYL, { position: at(x, -0.2, -4.08), rotation: ALONG_Z, scale: [s(0.27), s(0.04), s(0.27)], color: '#ffb347' })
   }
   // Nav lights: red on the left wingtip, green on the right, white on the tail.
-  glow.add(GEO.sphere, { position: at(-4.32, -0.08, -1.7), scale: s(0.13), color: '#ff3b3b' })
-  glow.add(GEO.sphere, { position: at(4.32, -0.08, -1.7), scale: s(0.13), color: '#3bff6a' })
-  glow.add(GEO.sphere, { position: at(0, 2.48, -2.7), scale: s(0.11), color: '#ffffff' })
+  glow.add(GEO.sphereLow, { position: at(-4.32, -0.08, -1.7), scale: s(0.13), color: '#ff3b3b' })
+  glow.add(GEO.sphereLow, { position: at(4.32, -0.08, -1.7), scale: s(0.13), color: '#3bff6a' })
+  glow.add(GEO.sphereLow, { position: at(0, 2.48, -2.7), scale: s(0.11), color: '#ffffff' })
   if (gear) {
     // Nose gear and two mains, each a strut and a wheel.
     for (const [x, z] of [
@@ -330,7 +330,7 @@ export function addPod(c, scale = 1) {
   // The docking tunnel, its ring, the beacon and an antenna.
   body.add(GEO.cylinder, { position: at(0, 2.98, 0), scale: [s(0.46), s(0.36), s(0.46)], color: '#c3c9d3' })
   body.add(GEO.cylinder, { position: at(0, 3.18, 0), scale: [s(0.56), s(0.08), s(0.56)], color: '#e8452e' })
-  glow.add(GEO.sphere, { position: at(0.3, 3.3, 0), scale: s(0.07), color: '#ff3b3b' })
+  glow.add(GEO.sphereLow, { position: at(0.3, 3.3, 0), scale: s(0.07), color: '#ff3b3b' })
   body.add(GEO.cylinderLow, { position: at(-0.25, 3.55, 0), scale: [s(0.025), s(0.7), s(0.025)], color: '#c3c9d3' })
 }
 

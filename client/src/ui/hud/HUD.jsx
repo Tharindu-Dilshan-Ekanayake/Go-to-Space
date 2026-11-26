@@ -10,6 +10,7 @@ import { serverNow, useGame } from '../../store/game'
 import Icon from '../Icon'
 import StrokeText from '../StrokeText'
 import { ChunkyButton } from './parts'
+import { guideStep } from '../../game/guide'
 import { formatAir, oxygenLeft } from './oxygen'
 import { GRADIENTS, u } from './style'
 import TopBar from './TopBar'
@@ -203,7 +204,7 @@ function OxygenMeter() {
       </div>
       {low && (
         <div style={{ fontSize: u(28) }}>
-          <StrokeText stroke={u(6)} fill="#ffb0a8">
+          <StrokeText className="pp-text-wrap" stroke={u(6)} fill="#ffb0a8">
             LOW OXYGEN! Refill at the Oxygen Store, or fly back up
           </StrokeText>
         </div>
@@ -212,10 +213,55 @@ function OxygenMeter() {
   )
 }
 
+/** A suit too weak for this planet: a red banner counting down to the moment it fails. */
+function SuitHazard() {
+  const hazard = useGame((s) => s.hazard)
+  const [left, setLeft] = useState(0)
+  useEffect(() => {
+    if (!hazard) return undefined
+    const tick = () => setLeft(Math.max(0, Math.ceil((hazard.until - performance.now()) / 1000)))
+    tick()
+    const id = setInterval(tick, 200)
+    return () => clearInterval(id)
+  }, [hazard])
+  if (!hazard) return null
+  return (
+    <div className="pp-pulse text-center" style={{ padding: `${u(8)} ${u(24)}`, borderRadius: u(16), background: 'rgba(200,20,30,0.9)', border: `${u(4)} solid #111`, fontSize: u(36) }}>
+      <StrokeText stroke={u(7)} className="pp-text-wrap">{`SUIT FAILING! ${hazard.need} or better needed here - ${left}`}</StrokeText>
+    </div>
+  )
+}
+
+/** The first-time guide's card: which step, what to do, and a way to skip it. */
+function GuideCard({ step }) {
+  return (
+    <div className="pointer-events-auto flex items-center" style={{ gap: u(14), padding: `${u(8)} ${u(10)} ${u(8)} ${u(20)}`, borderRadius: u(16), background: 'linear-gradient(90deg, rgba(255,190,30,0.95), rgba(255,140,20,0.95))', border: `${u(4)} solid #111`, maxWidth: '72vw' }}>
+      <span style={{ fontSize: u(26), whiteSpace: 'nowrap' }}>
+        <StrokeText stroke={u(6)}>{`GUIDE ${step.index + 1}/${step.count}`}</StrokeText>
+      </span>
+      <span style={{ fontSize: u(32), lineHeight: 1.1 }}>
+        <StrokeText stroke={u(7)} className="pp-text-wrap">{step.text}</StrokeText>
+      </span>
+      <button
+        type="button"
+        onClick={() => {
+          sfx.click()
+          actions.skipGuide()
+        }}
+        style={{ fontSize: u(20), padding: `${u(4)} ${u(10)}`, borderRadius: u(10), border: `${u(3)} solid #111`, background: 'rgba(0,0,0,0.35)', color: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' }}
+      >
+        Skip
+      </button>
+    </div>
+  )
+}
+
 /** On Earth: the rocket countdown (urgent and beeping in its last seconds), and your next step. */
 function TopCenter() {
   const profile = useGame((s) => s.profile)
   const zone = useGame((s) => s.zone)
+  const travelling = useGame((s) => s.trip !== null)
+  const guide = travelling ? null : guideStep(profile)
   const [left, setLeft] = useState(() => msToLaunch(serverNow()))
   const onEarth = profile.location === EARTH
   const lastSecond = useRef(-1)
@@ -255,9 +301,14 @@ function TopCenter() {
         </div>
       )}
       <OxygenMeter />
-      <div className="text-center" style={{ fontSize: u(32), lineHeight: 1.15 }}>
-        <StrokeText stroke={u(7)}>{objectiveFor(profile, zone)}</StrokeText>
-      </div>
+      <SuitHazard />
+      {guide ? (
+        <GuideCard step={guide} />
+      ) : (
+        <div className="text-center" style={{ fontSize: u(32), lineHeight: 1.15 }}>
+          <StrokeText stroke={u(7)} className="pp-text-wrap">{objectiveFor(profile, zone)}</StrokeText>
+        </div>
+      )}
     </div>
   )
 }

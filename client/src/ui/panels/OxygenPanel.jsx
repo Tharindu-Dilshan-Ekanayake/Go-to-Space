@@ -134,7 +134,7 @@ export function OxygenPanel() {
       </div>
       {!atStore && (
         <p className="m-0 text-center" style={{ fontSize: u(26), marginBottom: u(12) }}>
-          <StrokeText stroke={u(5)} fill="#ffd27a">
+          <StrokeText stroke={u(5)} fill="#ffd27a" className="pp-text-wrap">
             Step into an Oxygen Store's ring to refill and buy tanks. There's one on Earth, on Halo Station and on every planet.
           </StrokeText>
         </p>

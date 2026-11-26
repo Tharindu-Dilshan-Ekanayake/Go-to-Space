@@ -1,10 +1,12 @@
 import { useState } from 'react'
 
-import { AD_REWARDS, GEM_PRODUCTS } from '@shared/balance'
+import { AD_REWARDS, MONEY_PRODUCTS } from '@shared/balance'
 import { formatNumber } from '@shared/format'
 import { bestReward } from '@shared/logic'
 
-import { buyGems, isRewardedAvailable, useGemsBalance, watchRewardedAd } from '../../bloxity/services'
+import { sfx } from '../../audio/sfx'
+import { isRewardedAvailable, watchRewardedAd } from '../../bloxity/services'
+import { actions } from '../../net/actions'
 import { useGame } from '../../store/game'
 import Icon from '../Icon'
 import StrokeText from '../StrokeText'
@@ -48,60 +50,44 @@ function SectionTitle({ children }) {
 const GRID = { gridTemplateColumns: `repeat(auto-fill, minmax(${u(200)}, 1fr))`, gap: u(12) }
 
 /**
- * Boxity Gems: real-currency extras, priced by Boxity's catalog (the game only names
- * the sku). The purchase is confirmed to the game server by Boxity, which then grants
- * it; offline it's granted here once Boxity says it went through.
+ * The Store's extras, all bought with Money (balance MONEY_PRODUCTS) - nothing costs
+ * Gems - and a way to the suits.
  */
-function GemsSection() {
-  const balance = useGemsBalance()
-  const ownsX2 = useGame((s) => Boolean(s.profile.passes.moneyX2))
-  const ownsSolar = useGame((s) => s.profile.ownedSuits.includes('solar'))
-  const [busy, setBusy] = useState(null)
-  const [message, setMessage] = useState(null)
-  const purchase = async (sku) => {
-    setBusy(sku)
-    setMessage(null)
-    const result = await buyGems(sku)
-    setBusy(null)
-    if (!result.success) setMessage(result.error ? `Purchase not completed: ${result.error}` : 'Purchase not completed')
+function MoneySection() {
+  const profile = useGame((s) => s.profile)
+  const openPanel = useGame((s) => s.openPanel)
+  const buy = (id, product) => {
+    if (profile.money < product.price) {
+      sfx.error()
+      return
+    }
+    actions.buyProduct(id)
   }
-  const owned = { money_x2: ownsX2, solar_suit: ownsSolar }
   return (
     <div>
-      <div className="flex flex-wrap items-baseline justify-between" style={{ gap: u(10) }}>
-        <SectionTitle>Gems Shop</SectionTitle>
-        {balance !== null && (
-          <span style={{ fontSize: u(30) }}>
-            <StrokeText stroke={u(6)} fill="#7fe2ff">
-              {formatNumber(balance)} Gems
-            </StrokeText>
-          </span>
-        )}
-      </div>
+      <SectionTitle>Shop</SectionTitle>
       <div className="grid" style={GRID}>
-        {Object.entries(GEM_PRODUCTS).map(([sku, product]) => (
-          <Card key={sku} icon={<Icon name={product.icon} size={u(96)} />} name={product.name} blurb={product.blurb} faded={owned[sku]}>
-            <ChunkyButton
-              gradient={owned[sku] ? GRADIENTS.greyButton : GRADIENTS.blueButton}
-              disabled={busy !== null || owned[sku]}
-              onClick={() => purchase(sku)}
-              className="w-full"
-              style={{ height: u(58) }}
-            >
-              <span style={{ fontSize: u(30) }}>
-                <StrokeText stroke={u(6)}>{owned[sku] ? 'Owned' : busy === sku ? '...' : 'Buy with Gems'}</StrokeText>
-              </span>
-            </ChunkyButton>
-          </Card>
-        ))}
+        {Object.entries(MONEY_PRODUCTS).map(([id, product]) => {
+          const owned = Boolean(product.grant?.pass && profile.passes[product.grant.pass])
+          const afford = profile.money >= product.price
+          return (
+            <Card key={id} icon={<Icon name={product.icon} size={u(96)} />} name={product.name} blurb={product.blurb} faded={owned}>
+              <ChunkyButton gradient={owned || !afford ? GRADIENTS.greyButton : GRADIENTS.greenButton} disabled={owned} onClick={() => buy(id, product)} className="w-full" style={{ height: u(58) }}>
+                <span style={{ fontSize: u(30) }}>
+                  <StrokeText stroke={u(6)}>{owned ? 'Owned' : `$${formatNumber(product.price)}`}</StrokeText>
+                </span>
+              </ChunkyButton>
+            </Card>
+          )
+        })}
+        <Card icon={<Icon name="star" size={u(96)} />} name="Space Suits" blurb="Better suits pay more and reach further planets">
+          <ChunkyButton gradient={GRADIENTS.purpleButton} onClick={() => openPanel('suits')} className="w-full" style={{ height: u(58) }}>
+            <span style={{ fontSize: u(30) }}>
+              <StrokeText stroke={u(6)}>See suits</StrokeText>
+            </span>
+          </ChunkyButton>
+        </Card>
       </div>
-      {message && (
-        <p className="m-0 text-center" style={{ fontSize: u(24), marginTop: u(8) }}>
-          <StrokeText stroke={u(5)} fill="#ffd27a">
-            {message}
-          </StrokeText>
-        </p>
-      )}
     </div>
   )
 }
@@ -144,7 +130,7 @@ export function StorePanel() {
     <Panel title="STORE" icon="store" width={1080}>
       <div className="flex flex-col" style={{ gap: u(18) }}>
         <FreeSection />
-        <GemsSection />
+        <MoneySection />
       </div>
     </Panel>
   )

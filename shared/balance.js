@@ -20,6 +20,8 @@
  * - `reward`   what a delivery to or from it pays (before suit and pass bonuses)
  * - `gravity`  fraction of Earth's: jumps there are floatier
  * - `look`     colours for its surface scene (client only reads these)
+ * - `minSuit`  the least suit that survives there (that one or better: suitRank); arrive
+ *              in anything less and it fails - SUIT_FAIL_MS later you're back on Earth
  */
 export const EARTH = 'earth'
 export const STATION = 'station'
@@ -27,6 +29,7 @@ export const STATION = 'station'
 export const DESTINATIONS = [
   {
     id: 'moon',
+    minSuit: 'rookie',
     name: 'Moon',
     blurb: 'Grey dust and long, slow jumps.',
     cost: 0,
@@ -36,6 +39,7 @@ export const DESTINATIONS = [
   },
   {
     id: 'mars',
+    minSuit: 'rookie',
     name: 'Mars',
     blurb: 'Rusty dunes under a butterscotch sky.',
     cost: 500,
@@ -45,6 +49,7 @@ export const DESTINATIONS = [
   },
   {
     id: 'venus',
+    minSuit: 'scout',
     name: 'Venus',
     blurb: 'Thick yellow clouds and black basalt.',
     cost: 1500,
@@ -54,6 +59,7 @@ export const DESTINATIONS = [
   },
   {
     id: 'mercury',
+    minSuit: 'comet',
     name: 'Mercury',
     blurb: 'Scorched craters, a giant Sun overhead.',
     cost: 4000,
@@ -63,6 +69,7 @@ export const DESTINATIONS = [
   },
   {
     id: 'europa',
+    minSuit: 'ranger',
     name: 'Europa',
     blurb: 'Cracked ice over a hidden ocean.',
     cost: 10000,
@@ -72,6 +79,7 @@ export const DESTINATIONS = [
   },
   {
     id: 'io',
+    minSuit: 'meteor',
     name: 'Io',
     blurb: 'Sulphur fields and restless volcanoes.',
     cost: 20000,
@@ -81,6 +89,7 @@ export const DESTINATIONS = [
   },
   {
     id: 'ganymede',
+    minSuit: 'voyager',
     name: 'Ganymede',
     blurb: 'The biggest moon there is.',
     cost: 40000,
@@ -90,6 +99,7 @@ export const DESTINATIONS = [
   },
   {
     id: 'callisto',
+    minSuit: 'aurora',
     name: 'Callisto',
     blurb: 'Ancient, dark, and covered in craters.',
     cost: 75000,
@@ -99,6 +109,7 @@ export const DESTINATIONS = [
   },
   {
     id: 'titan',
+    minSuit: 'nova',
     name: 'Titan',
     blurb: 'Orange haze and methane lakes, out by Saturn.',
     cost: 150000,
@@ -207,7 +218,7 @@ export const SUITS = [
   { id: 'eclipse', name: 'Eclipse', price: 160000, mult: 3, speed: 1.3, jump: 1.3, jetpack: true, colors: { main: '#1d2030', accent: '#3ff0ff', visor: '#3ff0ff' } },
   { id: 'quasar', name: 'Quasar', price: 320000, mult: 3.6, speed: 1.35, jump: 1.35, jetpack: true, colors: { main: '#f7f3e8', accent: '#e8b021', visor: '#fff1b8' } },
   { id: 'galaxy', name: 'Galaxy', price: 750000, mult: 4.5, speed: 1.4, jump: 1.4, jetpack: true, colors: { main: '#141a4a', accent: '#c084ff', visor: '#8fb8ff' } },
-  { id: 'solar', name: 'Solar Gold', price: null, gems: 'solar_suit', mult: 2.5, speed: 1.3, jump: 1.3, jetpack: true, colors: { main: '#ffcf3a', accent: '#ff7a1a', visor: '#fff3b0' } },
+  { id: 'solar', name: 'Solar Gold', price: 400000, mult: 2.5, speed: 1.3, jump: 1.3, jetpack: true, colors: { main: '#ffcf3a', accent: '#ff7a1a', visor: '#fff3b0' } },
 ]
 
 /**
@@ -218,21 +229,44 @@ export const NO_SUIT = { id: 'none', name: 'No suit', price: null, mult: 1, spee
 
 export const suitById = (id) => SUITS.find((s) => s.id === id) || NO_SUIT
 
+/**
+ * How good a suit is, for the planets' `minSuit`: its place in the range (no suit -1;
+ * Solar Gold, a Gems suit, counts as Eclipse).
+ */
+export function suitRank(id) {
+  if (!id || id === 'none') return -1
+  if (id === 'solar') return SUITS.findIndex((s) => s.id === 'eclipse')
+  return SUITS.findIndex((s) => s.id === id)
+}
+/** Whether suit `suitId` survives on `place` (anywhere without a minimum: yes). */
+export const suitSurvives = (suitId, place) => {
+  const need = destinationById(place)?.minSuit
+  return !need || suitRank(suitId) >= suitRank(need)
+}
+/** How long a too-weak suit holds out on arrival before it fails. */
+export const SUIT_FAIL_MS = 5000
+
+/**
+ * The first-time guide: one step after another until the first round trip is done.
+ * `profile.guide` counts the steps finished (GUIDE_STEPS.length: all done).
+ */
+export const GUIDE_STEPS = ['suit', 'package', 'rocket', 'shuttle', 'deliver', 'beacon', 'pod']
+
 // --- Store ------------------------------------------------------------------------
 
 /**
- * Boxity Gems products, by sku. Prices live in Boxity's catalog, never here: the game
- * only names the sku and, once Boxity confirms the sale, grants what it says. Money
- * packs grow with you: `deliveries` deliveries' worth at the best place you've unlocked.
+ * Boxity Gems products, by sku: none. Everything in the game is bought with Money
+ * (MONEY_PRODUCTS, the suits, the oxygen tanks). The Gems plumbing (server gems.js) stays
+ * in place but has nothing to sell: a grant for an old sku is consumed and grants nothing.
  */
-export const GEM_PRODUCTS = {
-  money_small: { name: 'Cargo Bonus', blurb: '10 top-route deliveries of Money', icon: 'trophy', grant: { deliveries: 10 } },
-  money_big: { name: 'Freight Fortune', blurb: '60 top-route deliveries of Money', icon: 'trophy', grant: { deliveries: 60 } },
-  money_x2: { name: 'x2 Money', blurb: 'Double the pay on every delivery, forever', icon: 'starGold', grant: { pass: 'moneyX2' } },
-  solar_suit: { name: 'Solar Gold Suit', blurb: 'x2.5 pay, top speed and a jetpack', icon: 'star', grant: { suit: 'solar' } },
+export const GEM_PRODUCTS = {}
+
+/** The Store's Money products, by id: `price` in Money, `grant` what you get (a pass). */
+export const MONEY_PRODUCTS = {
+  money_x2: { name: 'x2 Money', blurb: 'Double the pay on every delivery, forever', icon: 'starGold', price: 250000, grant: { pass: 'moneyX2' } },
 }
 
-/** Permanent passes a profile can hold (from Gems products). */
+/** Permanent passes a profile can hold (bought in the Store: MONEY_PRODUCTS). */
 export const PASSES = ['moneyX2']
 
 /**

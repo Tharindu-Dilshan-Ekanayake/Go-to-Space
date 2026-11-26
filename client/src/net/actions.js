@@ -22,7 +22,7 @@ export const actions = {
   dropPackage: () => send('dropPackage'),
   /**
    * Sets off for `to`: `via` 'shuttle' (from a bay or the beacon), 'pod' (station down to
-   * Earth) or 'warp' (the Star Map, to anywhere you've been). The rocket isn't asked
+   * Earth) - there's no warping. The rocket isn't asked
    * for: it leaves on schedule with whoever stands in the boarding ring.
    */
   travel: (to, via) => send('travel', { to, via }),
@@ -32,6 +32,10 @@ export const actions = {
   /** At an Oxygen Store: a bigger tank, or a refill. */
   buyTank: (id) => send('buyTank', { id }),
   refillOxygen: () => send('refillOxygen', {}),
+  /** Turns the first-time guide off. */
+  skipGuide: () => send('skipGuide', {}),
+  /** A Store product (balance MONEY_PRODUCTS), for Money. */
+  buyProduct: (id) => send('buyProduct', { id }),
   /** A rewarded ad Boxity says was watched; the server verifies the token. */
   adReward: (placement, rewardToken) => send('adReward', { placement, rewardToken }),
   /** Asks the server to apply any Gems purchases Boxity has confirmed. */

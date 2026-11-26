@@ -131,7 +131,6 @@ export function TouchControls() {
             width: RADIUS * 2,
             height: RADIUS * 2,
             opacity: 0.35,
-            left: RADIUS,
           }}
         >
           <div

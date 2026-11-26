@@ -110,12 +110,11 @@ const perk = (suit) => {
 /**
  * Space suits: each pays more per delivery, and the better ones are faster, jump higher
  * or fly. Bought at the Suit Shop on Earth (the panel opens at its counter); ones you own
- * can be put on from anywhere. Solar Gold is a Gems product (the Store).
+ * can be put on from anywhere. Every suit is bought with Money - nothing costs Gems.
  */
 export function SuitsPanel() {
   const profile = useGame((s) => s.profile)
   const atShop = useGame((s) => s.zone === 'suits')
-  const openPanel = useGame((s) => s.openPanel)
 
   const buy = (suit) => {
     if (!atShop || profile.money < suit.price) {
@@ -129,7 +128,7 @@ export function SuitsPanel() {
     <Panel title="SUITS" icon="star" width={1100}>
       {!atShop && (
         <p className="m-0 text-center" style={{ fontSize: u(26), marginBottom: u(12) }}>
-          <StrokeText stroke={u(5)} fill="#ffd27a">
+          <StrokeText stroke={u(5)} fill="#ffd27a" className="pp-text-wrap">
             Buy new suits at the Suit Shop on Earth. You can wear the ones you own anywhere.
           </StrokeText>
         </p>
@@ -144,7 +143,6 @@ export function SuitsPanel() {
         {SUITS.map((suit) => {
           const owned = profile.ownedSuits.includes(suit.id)
           const worn = profile.suit === suit.id
-          const gems = suit.price === null
           let button
           if (worn)
             button = {
@@ -157,12 +155,6 @@ export function SuitsPanel() {
               label: 'Wear',
               gradient: GRADIENTS.blueButton,
               onClick: () => actions.equipSuit(suit.id),
-            }
-          else if (gems)
-            button = {
-              label: 'Gems Store',
-              gradient: GRADIENTS.purpleButton,
-              onClick: () => openPanel('store'),
             }
           else
             button = {

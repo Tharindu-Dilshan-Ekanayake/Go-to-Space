@@ -53,6 +53,8 @@ export const useGame = create((set) => ({
 
   /** A short celebration banner: { text, id, tone } (tone: 'good' | 'info' | 'bad'). */
   toast: null,
+  /** A suit too weak for where you are: `{ need, until }` (performance.now ms), or null. */
+  hazard: null,
 
   // --- Actions -----------------------------------------------------------------
 

@@ -16,6 +16,7 @@ import FollowCamera from './FollowCamera'
 import Particles from './fx/Particles'
 import WorldLabels from './labels/WorldLabels'
 import Lighting from './Lighting'
+import GuideMarker from './GuideMarker'
 import PerfProbe from './PerfProbe'
 import { CraftEnvironment } from './places/craft'
 import EarthBase from './places/EarthBase'
@@ -59,6 +60,33 @@ function FirstFrameSignal({ onFirstFrame }) {
     // Deferred: never update React state from inside the frame loop.
     setTimeout(onFirstFrame, 0)
   })
+  return null
+}
+
+/**
+ * Paces the frames (the Canvas renders on demand): at most 60 a second, even on a 120 or
+ * 144 Hz screen - more would only double or more the GPU's work for nothing a player
+ * could see - and 20 while a menu panel covers the view. Frames are asked for on a
+ * running schedule, so a fast screen averages 60 rather than rounding down.
+ */
+function FrameLimiter() {
+  const invalidate = useThree((s) => s.invalidate)
+  const panelOpen = useGame((s) => s.panel !== null)
+  useEffect(() => {
+    const step = 1000 / (panelOpen ? 20 : 60)
+    let next = performance.now()
+    let id = 0
+    const loop = (now) => {
+      if (now >= next - 3) {
+        invalidate()
+        next += step
+        if (next < now - step) next = now + step
+      }
+      id = requestAnimationFrame(loop)
+    }
+    id = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(id)
+  }, [invalidate, panelOpen])
   return null
 }
 
@@ -266,7 +294,7 @@ export function GameScene({ onReady }) {
     <>
       <Canvas
         key={`${contextKey}:${rebuild}`}
-        frameloop={adBreak ? 'never' : 'always'}
+        frameloop={adBreak ? 'never' : 'demand'}
         dpr={dpr}
         gl={createRenderer}
         // PCF, not R3F's default "soft": three r18x removed PCFSoftShadowMap.
@@ -283,6 +311,7 @@ export function GameScene({ onReady }) {
         {/* Under 45 FPS: shed load (quality.degrade). Back over 58 with room to spare:
             resolution comes back (quality.recover). After a few flips back and forth it
             settles where it is rather than see-sawing. */}
+        <FrameLimiter />
         <PerformanceMonitor bounds={() => [45, 58]} flipflops={4} onDecline={handleDecline} onIncline={handleIncline} />
 
         <Sky />
@@ -295,6 +324,7 @@ export function GameScene({ onReady }) {
         <RemotePlayers />
         <RemoteAvatars />
         <Player />
+        <GuideMarker />
         <BlobShadows />
 
         <FollowCamera />

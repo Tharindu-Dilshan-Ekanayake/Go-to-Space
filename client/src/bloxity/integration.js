@@ -27,12 +27,20 @@ export const LEADERBOARDS = [
 ]
 
 /**
- * The screens the game shows, for Boxity's screen ads (services.js setScreen): a modal
- * panel (shop, pets, rebirth...) and gameplay. Gameplay banners stay OFF - Boxity shows
- * none during play unless `gameplay` gets `show: true` here, and that is the
- * developer's call, not a default.
+ * The screens the game shows, for Boxity's screen ads (services.js setScreen): a popup
+ * the player opened (Store, Star Map, Suits, Leaderboards, Settings) and gameplay. Ads
+ * belong to popups only: gameplay is explicitly OFF, so nothing is ever shown while
+ * playing. (Popups that open by themselves when you walk onto a pad don't count: see
+ * `adScreenFor`.)
  */
-export const AD_SCREENS = { panel: {}, gameplay: {} }
+export const AD_SCREENS = { panel: { show: true }, gameplay: { show: false } }
+
+/**
+ * Which ad screen the game is on: 'panel' only while a popup the player opened is up; a
+ * popup that opened on its own (walking onto the Suit Shop mat, the Oxygen Store, a
+ * locked bay - `panelData.auto`) is still 'gameplay', so no ad can ambush a delivery.
+ */
+export const adScreenFor = (state) => (state.panel && !state.panelData?.auto ? 'panel' : 'gameplay')
 
 /** Once per page, right after `Legion.SDK.init()`. */
 export function setupOnce(sdk) {
@@ -187,15 +195,15 @@ function installLifecycle(sdk) {
     gameplayStarted = true
     safeCall(game?.gameplayStart?.bind(game))
   }
-  /** Screen ads: 'panel' while a modal panel is open, 'gameplay' otherwise. */
+  /** Screen ads: 'panel' while a popup the player opened is up, 'gameplay' otherwise. */
   const sync = (state) => {
     if (!state.playable) return
     start()
-    setScreen(state.panel ? 'panel' : 'gameplay')
+    setScreen(adScreenFor(state))
   }
   sync(getGame())
   const unsubscribe = useGame.subscribe((state, prev) => {
-    if (state.playable !== prev.playable || state.panel !== prev.panel) sync(state)
+    if (state.playable !== prev.playable || state.panel !== prev.panel || state.panelData !== prev.panelData) sync(state)
   })
 
   const onPageHide = () => {

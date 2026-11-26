@@ -1,22 +1,28 @@
-import { BALLS, TIRES, TUTORIAL, WORLDS } from '@shared/balance'
+import { PLACE_NAMES } from '@shared/balance'
 import { formatNumber } from '@shared/format'
+import { arrivalPoint } from '@shared/session'
 
 import { sfx } from '../audio/sfx'
-import { burst, queueTrainFx } from '../game/fx/fxQueue'
+import { burst } from '../game/fx/fxQueue'
 import { runtime } from '../game/runtime'
-import { beginRoll, roll } from '../game/roll/rollControl'
-import { getGame } from '../store/game'
+import { getGame, useGame } from '../store/game'
 import { fadeThrough } from '../ui/fade'
-import { refreshRemoteWorlds } from './remotePlayers'
+import { refreshRemotePlaces } from './remotePlayers'
 
-/** A point above wherever you're watching: you in the lobby, or your ball in flight. */
+/** A point above you. */
 const atPlayer = (dy = 1.2) => {
-  const p = roll.active ? roll.position : runtime.player.position
+  const p = runtime.player.position
   return { x: p.x, y: p.y + dy, z: p.z }
 }
 
-/** Whether the tutorial's last step was just done (it ends on a purchase). */
-const tutorialDone = (before, after) => before.tutorialStep < TUTORIAL.length && after.tutorialStep >= TUTORIAL.length
+/** Puts you at `place`'s arrival point, facing the way it says, the camera behind you. */
+function placeAt(place) {
+  const at = arrivalPoint(place)
+  runtime.player.position.set(at.x, 0, at.z)
+  runtime.player.yaw = at.yaw
+  runtime.camera.yaw = 0
+  runtime.camera.snap = true
+}
 
 /**
  * Applies one authority event to the client: updates the store and kicks off any
@@ -28,117 +34,117 @@ export function handleServerEvent(type, payload) {
     case 'profile': {
       const before = game.profile
       game.setProfile(payload.profile, payload.session)
-      if ((payload.profile.world || 0) !== (before.world || 0)) refreshRemoteWorlds()
-      // Celebrate the big moments, whatever caused them.
-      if (game.profileLoaded && payload.profile.rebirths > before.rebirths) {
-        sfx.rebirth()
-        burst({ ...atPlayer(), count: 60, speed: 9 })
-      } else if (game.profileLoaded && payload.profile.ownedTires.length > before.ownedTires.length) {
-        // A new sword: a shower of confetti and its name up in lights.
+      if (payload.profile.location !== before.location) refreshRemotePlaces()
+      if (game.profileLoaded && payload.profile.suit !== before.suit) {
         sfx.buy()
-        sfx.wins()
-        burst({ ...atPlayer(2.5), count: 60, palette: 'confetti', speed: 9 })
-        const tire = TIRES.find((t) => t.id === payload.profile.equippedTire)
-        if (tire) game.showToast(`NEW SWORD: ${tire.name}!${tutorialDone(before, payload.profile) ? ' Tutorial complete - have fun!' : ''}`)
-      } else if (game.profileLoaded && (payload.profile.ownedBalls?.length || 0) > (before.ownedBalls?.length || 0)) {
-        // A new enchantment: the same, in its colours.
-        sfx.buy()
-        sfx.wins()
-        burst({ ...atPlayer(2.5), count: 60, palette: 'gold', speed: 9 })
-        const ball = BALLS.find((b) => b.id === payload.profile.equippedBall)
-        if (ball) game.showToast(`NEW ENCHANT: ${ball.name}!${tutorialDone(before, payload.profile) ? ' Tutorial complete - have fun!' : ''}`)
+        burst({ ...atPlayer(1.6), count: 50, palette: 'confetti', speed: 8 })
       }
       break
     }
 
-    case 'train':
-      game.patchProfile({
-        health: payload.health,
-        level: payload.level,
-        // Gains from rolling and walking aren't pad training.
-        ...(payload.source === 'pad' ? { lastPad: payload.pad } : {}),
+    case 'trip': {
+      // Off you go: the flight scene takes over until 'arrive'.
+      runtime.player.frozen = true
+      useGame.setState({ hazard: null })
+      game.closePanel()
+      game.setTrip({ ...payload, startedAt: performance.now() })
+      refreshRemotePlaces()
+      if (payload.via === 'rocket') sfx.liftoff()
+      else if (payload.via === 'warp') sfx.warp()
+      else sfx.shuttle()
+      break
+    }
+
+    case 'arrive': {
+      // A white flash covers the swap from the flight scene to the new place.
+      fadeThrough(() => {
+        placeAt(payload.place)
+        runtime.player.frozen = false
+        game.setTrip(null)
+        refreshRemotePlaces()
       })
-      queueTrainFx(payload)
-      if (payload.leveledUp) {
-        sfx.levelUp()
-        burst({ ...atPlayer(1.8), count: 24, palette: 'power', speed: 6 })
-      }
-      break
-
-    case 'roll': {
-      // (How well you timed the swing shows as the ball leaves the bat: rollControl.)
-      beginRoll(payload)
+      sfx.arrive()
+      const name = PLACE_NAMES[payload.place] || payload.place
+      game.showToast(payload.first ? `WELCOME TO ${name.toUpperCase()}!` : name, payload.first ? 'good' : 'info')
       break
     }
 
-    case 'quest':
-      // One of today's quests finished: a chime and a nudge to claim it.
-      sfx.levelUp()
-      game.showToast(`QUEST COMPLETE: ${payload.text}! Claim it in Quests`)
+    case 'delivered':
+      sfx.cash()
+      burst({ ...atPlayer(1.8), count: 60, palette: 'gold', speed: 9 })
+      game.showToast(`DELIVERED! +$${formatNumber(payload.money)}`)
       break
 
-    case 'streak':
-      // Played past midnight: the streak's next day starts now.
-      sfx.wins()
-      game.showToast(`DAY ${payload.days} STREAK! x${payload.multiplier.toFixed(1)} Wins on every throw`)
-      break
-
-    case 'pack':
-      sfx.buy()
-      burst({ ...atPlayer(2), count: 30, palette: 'power', speed: 7 })
-      break
-
-    case 'hatch':
-      game.setHatch({ eggId: payload.eggId, pets: payload.pets, id: Date.now() })
-      if (payload.eggId) {
-        setTimeout(sfx.crack, 1100)
-        setTimeout(sfx.reveal, 1250)
-      } else {
-        sfx.reveal()
-      }
-      break
-
-    case 'offline':
-      game.openPanel('offline', payload)
+    case 'picked':
+      sfx.pickup()
+      game.showToast(`New package for ${PLACE_NAMES[payload.to] || payload.to}  ($${formatNumber(payload.reward)})`, 'info')
       break
 
     case 'badge':
-      // (After the moment it was earned in - usually a hit - so that frame stays light.)
-      setTimeout(() => sfx.wins(), 1200)
+      setTimeout(() => {
+        sfx.badge()
+        game.showToast(`BADGE: ${payload.name}`)
+      }, 1600)
       break
-
-    case 'star': {
-      // Dragonfire Peaks' Secret Star, found: a shower of gold and the news.
-      sfx.wins()
-      sfx.levelUp()
-      burst({ ...atPlayer(2), count: 70, palette: 'gold', speed: 10 })
-      game.showToast('SECRET STAR FOUND! x2 POWER FOREVER!')
-      break
-    }
-
-    case 'world': {
-      // Through the portal: a flash of white while the new world's sky and field go
-      // in (GameScene follows profile.world), and a fanfare.
-      fadeThrough(() => {})
-      sfx.rebirth()
-      burst({ ...atPlayer(2), count: 60, palette: 'confetti', speed: 9 })
-      const world = WORLDS[payload.world]
-      game.showToast(
-        payload.world === 1
-          ? `WELCOME TO ${world.name.toUpperCase()}! x${world.wins} Wins on every throw!${payload.first ? ' A Secret Star is hidden here...' : ''}`
-          : `Back in ${world.name}!`,
-      )
-      break
-    }
 
     case 'reward':
-      // A rewarded ad or a Gems purchase landed.
-      sfx.buy()
+      sfx.cash()
       burst({ ...atPlayer(2), count: 40, palette: 'gold', speed: 8 })
-      game.showToast(`${payload.label}${payload.wins ? ` +${formatNumber(payload.wins)} Wins` : ''}!`)
+      game.showToast(`${payload.label}${payload.money ? ` +$${formatNumber(payload.money)}` : ''}!`)
+      break
+
+    case 'oxygen':
+      if (payload?.empty) {
+        sfx.error()
+        game.showToast('OUT OF OXYGEN! Rescue shuttle to Halo Station', 'bad')
+      } else if (payload?.refilled) {
+        sfx.buy()
+        burst({ ...atPlayer(1.6), count: 30, palette: 'confetti', speed: 6 })
+        game.showToast(payload.tank ? 'NEW OXYGEN TANK!' : 'OXYGEN REFILLED', 'info')
+      }
+      break
+
+    case 'suitWarning':
+      sfx.error()
+      game.showToast(`Your suit is too weak for ${(PLACE_NAMES[payload.place] || payload.place).toUpperCase()}! You need ${payload.need} or better`, 'bad')
+      break
+
+    case 'suitFailing':
+      sfx.error()
+      useGame.setState({ hazard: { need: payload.need, until: performance.now() + (payload.ms || 5000) } })
+      break
+
+    case 'suitOk':
+      useGame.setState({ hazard: null })
+      game.showToast('Suit holding - you are safe', 'info')
+      break
+
+    case 'died':
+      useGame.setState({ hazard: null })
+      sfx.error()
+      setTimeout(() => getGame().showToast('YOUR SUIT FAILED! You woke up back on Earth', 'bad'), 700)
+      break
+
+    case 'guide':
+      sfx.badge()
+      if (payload.done) {
+        burst({ ...atPlayer(2), count: 80, palette: 'confetti', speed: 9 })
+        setTimeout(() => getGame().showToast('GUIDE COMPLETE! You are a space courier now', 'good'), 1200)
+      }
+      break
+
+    case 'denied':
+      sfx.error()
+      if (payload?.reason) game.showToast(payload.reason, 'bad')
       break
 
     default:
       break
   }
+}
+
+/** Puts you where the authority says you are (join, reconnect). */
+export function spawnAt(place, x, z) {
+  placeAt(place)
+  if (Number.isFinite(x) && Number.isFinite(z)) runtime.player.position.set(x, 0, z)
 }

@@ -1,16 +1,35 @@
-# React + Vite
+# Orbit Express - client
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A space-courier game for the browser: pick up packages, ride the rocket to Halo Station,
+fly shuttles to the planets and moons, deliver for Money, unlock further destinations and
+better suits. React 19 + React Three Fiber, Zustand, Vite. Multiplayer through the game
+server in `../server` (Colyseus); plays offline when no server is reachable.
 
-Currently, two official plugins are available:
+## Run
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```sh
+npm ci
+npm run dev        # http://localhost:5173  (?offline to skip the server, ?perf for r3f-perf, ?debug for window.__pp)
+npm run build      # production build into dist/
+npm run lint
+```
 
-## React Compiler
+With the server running (`cd ../server && npm ci && npm run dev`), `npm run dev` finds it
+on port 2567 and plays online.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Where things are
 
-## Expanding the ESLint configuration
+| Path | What |
+|------|------|
+| `../shared/balance.js` | Every number: destinations, rewards, unlock costs, suits, trip times, the rocket schedule, Gems products |
+| `../shared/world.js` | Each place's layout: spawn, walls, floors, zones (Cargo Pad, bays, beacon, pod...) |
+| `../shared/logic.js`, `../shared/session.js` | The rules (run by the server, and locally offline) |
+| `src/game/places/` | The scenes: `EarthBase` (in the start-up bundle), `Station`, `Surface` (every destination), `Flight` (trips) - each away scene is its own lazy chunk |
+| `src/game/Player.jsx` | The character controller (per-place gravity, suit speed, jetpack) |
+| `src/game/suitGear.js` | The space suit drawn over every avatar |
+| `src/game/ticker.js` | 10 Hz zone detection: walking onto pads and bays |
+| `src/store/quality.js` | LOW / MEDIUM / HIGH presets (auto-detected, dropped automatically under 45 FPS) |
+| `src/ui/hud/HUD.jsx`, `src/ui/panels/` | HUD, Star Map, Suits, Store, Leaderboards, Settings |
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+All art is procedural (merged boxes and primitives through one shared toy material,
+planet textures painted on canvases at <= 512 px); there are no model or texture files.

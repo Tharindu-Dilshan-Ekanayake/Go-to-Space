@@ -18,9 +18,9 @@ import { activePlayers } from './registry.js'
  * shows them through the SDK; keep the two in step.
  */
 export const BLOXITY_LEADERBOARDS = [
-  { id: 'rebirths', label: 'Rebirths', order: 'desc', mode: 'best', format: 'number', reset: 'none' },
-  { id: 'wins', label: 'Total Wins', order: 'desc', mode: 'best', format: 'compact', reset: 'none' },
-  { id: 'distance', label: 'Longest Throw (m)', order: 'desc', mode: 'best', format: 'compact', reset: 'none' },
+  { id: 'deliveries', label: 'Deliveries', order: 'desc', mode: 'best', format: 'number', reset: 'none' },
+  { id: 'earned', label: 'Money Earned', order: 'desc', mode: 'best', format: 'compact', reset: 'none' },
+  { id: 'places', label: 'Places Visited', order: 'desc', mode: 'best', format: 'number', reset: 'none' },
   { id: 'playtime', label: 'Minutes Played', order: 'desc', mode: 'best', format: 'number', reset: 'none' },
 ]
 
@@ -28,14 +28,14 @@ const REPORT_MS = 20_000
 /** Boxity takes at most this many scores per call. */
 export const MAX_SCORES_PER_REPORT = 200
 
-/** A profile's score on each board, as whole numbers: `{ rebirths, wins, distance, playtime }`. */
+/** A profile's score on each board, as whole numbers: `{ deliveries, earned, places, playtime }`. */
 export function leaderboardScores(profile) {
   const stats = profile.stats || {}
   const whole = (n) => (Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0)
   return {
-    rebirths: whole(profile.rebirths),
-    wins: whole(stats.totalWins),
-    distance: whole(stats.bestDistance),
+    deliveries: whole(stats.deliveries),
+    earned: whole(stats.totalEarned),
+    places: whole(profile.visited?.length),
     playtime: whole((stats.playtime || 0) / 60),
   }
 }

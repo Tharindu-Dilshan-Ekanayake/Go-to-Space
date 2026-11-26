@@ -5,31 +5,31 @@ import { iconUrl } from './icons'
 import StrokeText from './StrokeText'
 
 const TIPS = [
-  'Stand at a training dummy to slash it and gain Power automatically!',
-  'More Power = your sword flies further down the valley, and every metre pays Wins!',
-  'HOLD THROW and let go when the meter is in the gold for a PERFECT throw: x1.5 distance, x1.6 Wins!',
-  'Rebirth at max level for x2, x3, x4... Power and a higher level cap.',
-  'The further your sword flies, the more each metre pays.',
-  'Spend Wins on bigger swords, pets and better training dummies.',
-  'Enchant your sword at the Enchant Altar: the Flame Aura flies further and leaves a trail of fire!',
-  'Pets multiply all the Power you gain.',
-  'You earn Power every second your sword flies!',
-  'Every sword is a different shape - wood, bamboo, bone, steel, gold, lava, diamond... collect all 36 - the 12 Legend swords pay extra Wins!',
-  'Sunblade Valley is 80 stages long - can you reach Legend Summit?',
-  'Rebirth 8 times to open the portal to Dragonfire Peaks: x3 Wins on every throw!',
+  'Step on a Cargo Pad to pick up a package - the card at the bottom left says where it goes.',
+  'Stand in the green ring on the launch pad when the countdown hits zero to ride the rocket to Halo Station.',
+  'At Halo Station, walk into a shuttle bay to fly to that planet.',
+  'Further destinations pay much more per delivery. Unlock them on the Star Map.',
+  'Better suits pay more for every delivery - and the best ones have a jetpack!',
+  'Gravity is weaker on the moons: jump and see how high you go.',
+  'Once you have been somewhere, the Star Map can warp you straight back.',
+  'Deliver a package and you are handed the next one right away.',
 ]
 
 /**
- * The loading screen's backdrop, a castle valley at dawn in plain CSS (no image to
- * download): a deep blue sky warming to gold at the horizon, a low sun, the dark line of
- * the far mountains, and the green valley with its long stone road below. Layers, top
- * first.
+ * The loading screen's backdrop, deep space in plain CSS (no image to download): a
+ * scatter of stars, a soft nebula glow, and the curve of a blue planet rising along the
+ * bottom. Layers, top first.
  */
-const STADIUM_BACKDROP = [
-  'radial-gradient(circle at 50% 52%, rgba(255,250,225,0.95) 0 2.2%, rgba(255,226,150,0.45) 6%, transparent 16%)',
-  'linear-gradient(90deg, transparent 44%, rgba(200,190,175,0.85) 44.5% 55.5%, transparent 56%) bottom / 100% 38% no-repeat',
-  'repeating-linear-gradient(180deg, #2b9a47 0 26px, #37b455 26px 52px) bottom / 100% 38% no-repeat',
-  'linear-gradient(180deg, #132f74 0%, #2c5fc0 30%, #f0a067 50%, #ffd08c 54%, #3a3f6a 54.4%, #4a5a86 62%)',
+const SPACE_BACKDROP = [
+  'radial-gradient(1.5px 1.5px at 12% 18%, #fff 50%, transparent 51%)',
+  'radial-gradient(1.5px 1.5px at 78% 12%, #fff 50%, transparent 51%)',
+  'radial-gradient(2px 2px at 64% 34%, #fff 50%, transparent 51%)',
+  'radial-gradient(1.5px 1.5px at 30% 42%, #cfe6ff 50%, transparent 51%)',
+  'radial-gradient(2px 2px at 88% 48%, #fff 50%, transparent 51%)',
+  'radial-gradient(1.5px 1.5px at 6% 60%, #fff 50%, transparent 51%)',
+  'radial-gradient(ellipse 120% 60% at 50% 125%, #5fb4ff 0 48%, #2f7fe6 52%, rgba(47,127,230,0.35) 56%, transparent 62%)',
+  'radial-gradient(ellipse 60% 40% at 70% 30%, rgba(140,90,255,0.35), transparent 70%)',
+  'linear-gradient(180deg, #02030a 0%, #0a1030 60%, #12205a 100%)',
 ].join(', ')
 
 /**
@@ -65,30 +65,27 @@ export function LoadingScreen({ done }) {
       className="pp-font absolute inset-0 z-[100] flex flex-col items-center justify-center gap-8 transition-opacity duration-500"
       style={{
         opacity: done ? 0 : 1,
-        background: STADIUM_BACKDROP,
+        background: SPACE_BACKDROP,
       }}
     >
       <div className="pp-loading-disc" aria-hidden="true">
-        <img src={iconUrl('bat')} alt="" width="150" height="150" draggable={false} />
+        <img src={iconUrl('rocket')} alt="" width="150" height="150" draggable={false} />
       </div>
 
-      {/* The game's name: SWORD TOSS over a big rainbow LEGENDS, tilted like a sticker. */}
+      {/* The game's name: ORBIT over a big gold EXPRESS, tilted like a sticker. */}
       <h1 className="m-0 flex flex-col items-center text-center leading-none" style={{ transform: 'rotate(-3deg)' }}>
         <span style={{ fontSize: 'clamp(30px, 7vw, 72px)' }}>
-          <StrokeText stroke="0.16em" gradient="linear-gradient(180deg, #ffffff 0%, #ffffff 55%, #ffe36b 56%, #ffb21e 100%)">
-            +1 Sword
+          <StrokeText stroke="0.16em" gradient="linear-gradient(180deg, #ffffff 0%, #ffffff 55%, #bfe6ff 56%, #6fb7ff 100%)">
+           Go to
           </StrokeText>
         </span>
         <span style={{ fontSize: 'clamp(44px, 10vw, 118px)', marginTop: '-0.08em' }}>
-          <StrokeText
-            stroke="0.15em"
-            gradient="linear-gradient(90deg, #ff4a4a 0%, #ff9a1e 18%, #ffe23a 36%, #4be05a 54%, #2fd0ff 72%, #b05cff 90%, #ff5fd2 100%)"
-          >
-            Throwing
+          <StrokeText stroke="0.15em" gradient="linear-gradient(180deg, #fffaa8 0%, #ffd52a 45%, #ff9c00 100%)">
+            Space
           </StrokeText>
         </span>
         <span className="text-base md:text-xl" style={{ marginTop: '0.4em' }}>
-          <StrokeText stroke={5}>TRAIN • THROW • EXPLORE • REBIRTH</StrokeText>
+          <StrokeText stroke={5}>PICK UP • LAUNCH • DELIVER • EXPLORE</StrokeText>
         </span>
       </h1>
 

@@ -12,14 +12,18 @@ export const QUALITY_LEVELS = ['LOW', 'MEDIUM', 'HIGH']
 export const PRESETS = {
   LOW: {
     dpr: 1,
-    antialias: false,
+    /**
+     * Hardware MSAA, even here: without it every edge - lamp posts, rings, lane lines,
+     * slab joints - stair-steps at pixel ratio 1. At ratio 1 it's cheap (near free on
+     * phones' tiled GPUs) and it isn't post-processing: no extra pass.
+     */
+    antialias: true,
     /** 'blob' = fake contact shadows only; 'realtime' = shadow-mapped sun. */
     shadows: 'blob',
     shadowMapSize: 0,
     particles: false,
-    speedLines: true,
-    /** Motion blur down the sides at speed (post-processing): samples a pixel, 0 = off. */
-    motionBlur: 0,
+    /** Streaks rushing past during trips (a pool of particles, so off on LOW). */
+    speedLines: false,
     viewDistance: 190,
     fogNear: 60,
     cloudCount: 8,
@@ -54,7 +58,6 @@ export const PRESETS = {
     shadowMapSize: 0,
     particles: true,
     speedLines: true,
-    motionBlur: 8,
     viewDistance: 300,
     fogNear: 100,
     cloudCount: 14,
@@ -74,7 +77,6 @@ export const PRESETS = {
     shadowMapSize: 1024,
     particles: true,
     speedLines: true,
-    motionBlur: 12,
     viewDistance: 460,
     fogNear: 140,
     cloudCount: 18,
@@ -125,9 +127,9 @@ function readSaved() {
 export const DEFAULT_LEVEL = 'LOW'
 
 function detectLevel() {
-  if (typeof navigator === 'undefined') return DEFAULT_LEVEL
-  const cores = navigator.hardwareConcurrency || 0
-  return isMobileDevice() || cores <= 4 ? 'LOW' : 'MEDIUM'
+  // Everyone starts on LOW: it looks right and runs smoothly everywhere. A player who
+  // wants more picks MEDIUM or HIGH in Settings, and that choice is remembered.
+  return DEFAULT_LEVEL
 }
 
 const initialLevel = readSaved() || detectLevel()
@@ -184,6 +186,14 @@ export const useQuality = create((set, get) => ({
     if (renderStep + 1 < RENDER_SCALES.length) {
       console.info(`[quality] FPS under budget, rendering at ${RENDER_SCALES[renderStep + 1] * 100}%`)
       set({ renderStep: renderStep + 1 })
+      return
+    }
+    // The last resort, once: antialiasing off. At the lowest resolution it hardly shows,
+    // and it's the GPU's biggest cost after the pixel count. (It takes rebuilding the
+    // WebGL context - a moment's pause - so it never comes back on by itself.)
+    if (get().antialias) {
+      console.info('[quality] FPS still under budget at the lowest resolution: antialiasing off')
+      set((s) => ({ antialias: false, rebuild: s.rebuild + 1 }))
     }
   },
 

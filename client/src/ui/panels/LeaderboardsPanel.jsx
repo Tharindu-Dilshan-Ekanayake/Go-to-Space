@@ -1,13 +1,14 @@
+
 import { openBoxityLeaderboard } from '../../bloxity/services'
-import { BOARD_INFO, boardRows } from '../../game/world/boards'
 import { useGame } from '../../store/game'
 import StrokeText from '../StrokeText'
 import { u } from '../hud/style'
+import { BOARD_INFO, boardRows } from '../boards'
 import Panel from './Panel'
 
 /**
- * The four leaderboards, the same data as the boards in the lobby. Inside Boxity each
- * title also opens Boxity's own board for it (all players, all time).
+ * The four leaderboards. Inside Boxity each title also opens Boxity's own board for it
+ * (all players, all time).
  */
 export function LeaderboardsPanel() {
   const leaderboards = useGame((s) => s.leaderboards)

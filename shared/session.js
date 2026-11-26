@@ -1,550 +1,371 @@
-import { CLICK_INTERVAL, comboBonus, crowdBonus, dayNumber, EGGS, hitGrade, ITEMS, MULTI_HATCH, PADS, ROLL_TICK, SHOP, TRAIN_INTERVAL, ZONES } from './balance.js'
-import { applyStreak, claimQuest, claimQuestBonus, ensureQuests, progressQuests, questText, rollLuckyGift } from './engage.js'
+import { breathable, destinationById, EARTH, GUIDE_STEPS, lastLaunchAt, PLACE_NAMES, STATION, SUIT_FAIL_MS, suitById, suitSurvives, TRIP_MS } from './balance.js'
 import {
-  advanceTutorial,
   applyAdReward,
   applyGemProduct,
-  applyRebirth,
-  applyRoll,
-  applyRollTick,
-  applyTrain,
-  applyClickSwing,
   awardBadge,
-  buyBall,
-  buyHealthPack,
-  buyShopItem,
-  buyTire,
-  claimDaily,
-  claimSecretStar,
-  claimFreeReward,
-  claimPlaytime,
+  buySuit,
+  canBeAt,
   createSession,
-  deletePet,
-  equipBall,
-  equipBestPets,
-  equipPet,
-  equipTire,
-  hatchEgg,
-  isMaxLevel,
-  isPadUnlocked,
-  skipRebirth,
-  unequipPet,
-  usePortal,
-  usePotion,
+  deliverPackage,
+  dropPackage,
+  earnedBadges,
+  equipSuit,
+  pickUpPackage,
+  unlockDestination,
+  visit,
+  buyProduct,
+  buyTank,
+  oxygenCapacity,
+  refillOxygen,
 } from './logic.js'
-import { atSwordCounter, eggStandNear, FREE_REWARD, inRollZone, MAX_MOVE_SPEED, onPad, portalAt, STAR } from './world.js'
+import { inZone, layoutOf } from './world.js'
 
-/** Reaching Starfall Orbit earns its badge; the last stage has its own. */
-const SPACE_ZONE = ZONES.findIndex((z) => z.id === 'space')
-
-/** Quest progress is sent at least this often (seconds) while it's changing. */
-const QUEST_SYNC = 5
-/** How far off a pad still counts as "on" it (network jitter). */
-const PAD_SLACK = 0.8
-/** Same for the roll zone. */
-const ROLL_SLACK = 1.5
-/** Tires are bought by standing at their stand; allow for a little lag. */
-const STAND_SLACK = 2
+/** How far outside a zone still counts as in it (network lag). */
+const ZONE_SLACK = 1.5
+/** Messages a player may send per second before the rest are ignored. */
+const MAX_MESSAGES_PER_SECOND = 20
 
 /**
- * One player's authoritative session: validates intents, runs the training tick and
- * reports what happened through `emit`.
+ * One player's authoritative session: validates intents against where they really are,
+ * runs the rocket schedule and their trips, and reports what happened through `emit`.
  *
  * Transport-agnostic on purpose. The Colyseus room wraps one of these per client; the
- * offline mode wraps one for the local player. Either way the rules that run are
- * byte-for-byte the same.
+ * offline mode wraps one for the local player. Either way the rules that run are the
+ * same.
  *
  * Events emitted (type, payload):
- * - 'profile'  { profile, session }  full state, after anything structural
- * - 'train'    { source, pad, gain, health, level, leveledUp, levels, maxed }  each
- *                Health gain; `source` is 'pad' (pad is its index), 'roll' (while your
- *                ball flies) or 'click' (a click swing), pad -1 for both
- * - 'roll'     { distance, wins, prize, discovered, blocked, broken, duration,
- *                multiplier, best, tireId, ballId }  a hit to replay
- * - 'pack'     { amount }  a Health pack landed
- * - 'hatch'    { eggId, pets: [{ uid, id }] }  pets to reveal
- * - 'badge'    { id, name }
- * - 'reward'   { label, wins? }  an ad reward or Gems purchase landed
- * - 'world'    { world, first }  stepped through the portal into `world`
- * - 'quest'    { index, text }  one of today's quests just finished (claim it in Quests)
- * - 'streak'   { days, broke, multiplier }  a new day of the login streak while playing
+ * - 'profile'   { profile, session }  full state, after anything changes
+ * - 'trip'      { from, to, via, duration }  you've left; arrive in `duration` ms
+ * - 'arrive'    { place, first }  you're there
+ * - 'delivered' { money, to, from }  a package delivered (the next one follows in 'profile')
+ * - 'picked'    { to, reward }  a package picked up
+ * - 'badge'     { id, name }
+ * - 'reward'    { label, money? }  an ad reward or Gems purchase landed
+ * - 'denied'    { reason }  an intent that was refused, worth telling the player about
  *
- * The roll event also carries `combo` (PERFECTs in a row), `others` (players in the
- * server paying the friends bonus) and `gift` (a lucky gift it landed, or null). The
- * session state sent with every profile carries `streak`: today's login streak news.
- *
- * `onRoll(result)` lets the host tell other players about a roll (ghost tires).
+ * Host hooks: `onTrip(place)` when the player leaves for `place` (the room stops
+ * validating their walk), `onArrive(place)` when they get there.
  */
 export class PlayerSession {
   /**
    * @param {object} profile normalized profile (see logic.normalizeProfile)
    * @param {{ now: number, emit: (type: string, payload?: object) => void,
    *           getPosition: () => {x: number, y: number, z: number},
-   *           onPurchase?: (productId: string) => boolean,
-   *           onRoll?: (result: object) => void, getOthers?: () => number,
+   *           onTrip?: (place: string) => void, onArrive?: (place: string) => void,
    *           rand?: () => number }} options
-   *   `onPurchase` lets the host veto or count a shop sale (stock limits). `getOthers`
-   *   says how many other players share your server and world (the friends bonus).
    */
-  constructor(profile, { now, emit, getPosition, onPurchase, onRoll, getOthers, rand = Math.random }) {
+  constructor(profile, { now, emit, getPosition, onTrip, onArrive, rand = Math.random }) {
     this.profile = profile
     this.session = createSession(now)
     this.emit = emit
     this.getPosition = getPosition
-    this.onPurchase = onPurchase
-    this.onRoll = onRoll
-    this.getOthers = getOthers
+    this.onTrip = onTrip
+    this.onArrive = onArrive
     this.rand = rand
-
-    // Coming back: today counts into the login streak (the client shows the news from
-    // the session state), today's quests are dealt, and a fresh PERFECT combo.
-    this.session.streak = applyStreak(profile, now)
-    this.session.combo = 0
-    ensureQuests(profile, now)
-    this.day = dayNumber(now)
-    /** Seconds played towards the next "play for N minutes" quest minute. */
-    this.minuteTimer = 0
-    /** Quest progress not yet sent, and seconds since it last was. */
-    this.questsChanged = false
-    this.questSync = 0
-
-    /** Pad the client says it's on; verified against position every tick. */
-    this.pad = -1
-    this.trainTimer = 0
-    /** Server time until which the player's tire is out (and its result) and can't roll again. */
-    this.busyUntil = 0
-    /** Server time the current roll stops; Health ticks in until then. */
-    this.rollingUntil = 0
-    this.rollTimer = 0
-    /** Server time of the last click swing that paid (they're rate-limited). */
-    this.clickAt = -Infinity
+    /** The trip under way: `{ from, to, via, arriveAt }`, or null. */
+    this.trip = null
+    /** A suit too weak for where you are: `{ failAt }` - you die then, unless you leave. */
+    this.hazard = null
+    /** When the last tick ran (rocket launches between two ticks are caught). */
+    this.lastTickAt = now
     this.dirty = false
+    this.budget = { second: Math.floor(now / 1000), count: 0 }
+    visit(profile, profile.location)
   }
 
   // --- Plumbing --------------------------------------------------------------------
 
   sendProfile() {
     this.dirty = false
-    this.questsChanged = false
-    this.questSync = 0
     this.emit('profile', { profile: this.profile, session: this.session })
   }
 
-  badge(id) {
-    const badge = awardBadge(this.profile, id)
-    if (badge) {
-      this.dirty = true
-      this.emit('badge', badge)
+  /** Where the player is now; 'transit' while a trip is under way. */
+  get place() {
+    return this.trip ? 'transit' : this.profile.location
+  }
+
+  /** Whether the player stands in zone `name` of the place they're in. */
+  at(name) {
+    if (this.trip) return false
+    const p = this.getPosition()
+    return Boolean(p) && inZone(this.profile.location, name, p.x, p.z, ZONE_SLACK)
+  }
+
+  deny(reason) {
+    this.emit('denied', { reason })
+  }
+
+  /** The first-time guide moves on, if it's at step `from` (balance GUIDE_STEPS). */
+  advanceGuide(from) {
+    const profile = this.profile
+    if (profile.guide !== from) return
+    profile.guide = from + 1
+    this.emit('guide', { step: profile.guide, done: profile.guide >= GUIDE_STEPS.length })
+  }
+
+  checkBadges() {
+    for (const id of earnedBadges(this.profile)) {
+      const badge = awardBadge(this.profile, id)
+      if (badge) this.emit('badge', badge)
     }
   }
 
-  tutorial(event) {
-    if (advanceTutorial(this.profile, event)) this.dirty = true
-  }
-
-  /**
-   * Counts towards today's quests, and tells the client about any just finished. Plain
-   * progress goes to the client with the next profile (at most QUEST_SYNC later), not a
-   * whole profile per pull-up rep.
-   */
-  quest(counter, amount, now) {
-    const finished = progressQuests(this.profile, counter, amount, now)
-    if (amount > 0) this.questsChanged = true
-    if (finished.length) this.dirty = true
-    for (const index of finished) this.emit('quest', { index, text: questText(this.profile.quests.list[index]) })
+  /** Too many messages this second: drop the rest (a stuck key, or someone scripting). */
+  overBudget(now) {
+    const second = Math.floor(now / 1000)
+    if (second !== this.budget.second) this.budget = { second, count: 0 }
+    this.budget.count += 1
+    return this.budget.count > MAX_MESSAGES_PER_SECOND
   }
 
   // --- Intents ---------------------------------------------------------------------
 
-  /** Dispatches one client message. Unknown types are ignored. */
+  /** Handles one message from the player. Unknown or malformed ones are ignored. */
   handle(type, payload = {}, now) {
-    const handler = this.handlers[type]
-    if (!handler) return
-    handler.call(this, payload || {}, now)
-    if (this.dirty) this.sendProfile()
-  }
-
-  handlers = {
-    enterPad({ pad }) {
-      const index = Number(pad)
-      if (!Number.isInteger(index) || !PADS[index]) return
-      if (!isPadUnlocked(this.profile, index)) return
-      if (this.pad !== index) {
-        this.pad = index
-        // The first step lands a beat after getting on, not instantly.
-        this.trainTimer = TRAIN_INTERVAL * 0.5
+    if (this.overBudget(now)) return
+    const profile = this.profile
+    const data = payload && typeof payload === 'object' ? payload : {}
+    switch (type) {
+      case 'cargo':
+        return this.cargo()
+      case 'dropPackage':
+        if (dropPackage(profile).ok) this.sendProfile()
+        return
+      case 'travel':
+        return this.travel(String(data.to || ''), String(data.via || ''), now)
+      case 'unlock': {
+        const result = unlockDestination(profile, String(data.id || ''))
+        if (!result.ok) return this.deny(result.error)
+        this.sendProfile()
+        return
       }
-    },
-
-    leavePad() {
-      this.pad = -1
-    },
-
-    /**
-     * A click slash: you slash the air with your sword, for one gain. Not at a dummy (it
-     * slashes for you), not while a throw is out (on a throw spot your click winds up a
-     * throw instead - that's the client's to send as a throw); at most one every
-     * CLICK_INTERVAL (a little slack for network jitter, never enough for an autoclicker
-     * to beat it).
-     */
-    clickSwing(_payload, now) {
-      if (now < this.busyUntil || this.onClaimedPad()) return
-      if (now - this.clickAt < CLICK_INTERVAL * 850) return
-      this.clickAt = now
-      this.gain('click', -1, applyClickSwing(this.profile, now))
-      this.quest('rep', 1, now)
-      this.tutorial('train')
-    },
-
-    setting({ key, value }) {
-      if (key === 'autoRebirth') this.profile.settings.autoRebirth = Boolean(value)
-      else if (key === 'autoRoll' && this.profile.passes.autoRoll) this.profile.settings.autoRoll = Boolean(value)
-      else return
-      this.dirty = true
-    },
-
-    rebirth() {
-      const result = applyRebirth(this.profile)
-      if (result.ok) this.afterRebirth(result)
-    },
-
-    skipRebirth() {
-      const result = skipRebirth(this.profile)
-      if (result.ok) this.afterRebirth(result)
-    },
-
-    /**
-     * Throws your sword: only from the THROW ZONE, and not while one is still flying.
-     * `accuracy` (0-1) is where the throw meter stood; absent for Auto Throw.
-     */
-    roll(payload, now) {
-      if (now < this.busyUntil) return
-      const p = this.getPosition()
-      if (!inRollZone(p.x, p.z, ROLL_SLACK)) return
-      const accuracy = Number.isFinite(payload?.accuracy) ? Math.min(1, Math.max(0, payload.accuracy)) : null
-      // PERFECTs in a row build a combo (anything less breaks it); friends in the server
-      // pay a bonus too. Then, sometimes, a lucky gift on top.
-      const grade = hitGrade(accuracy)
-      this.session.combo = grade?.id === 'perfect' ? (this.session.combo || 0) + 1 : 0
-      const combo = this.session.combo
-      const others = Math.max(0, Math.floor(this.getOthers?.() || 0))
-      const result = applyRoll(this.profile, now, accuracy, comboBonus(combo) * crowdBonus(others))
-      const gift = rollLuckyGift(this.profile, this.rand)
-      this.busyUntil = now + result.cooldown * 1000
-      this.rollingUntil = now + result.duration * 1000
-      this.rollTimer = 0
-      this.pad = -1
-      this.emit('roll', {
-        distance: result.distance,
-        wins: result.wins,
-        prize: result.prize,
-        discovered: result.discovered,
-        blocked: result.blocked,
-        broken: result.broken,
-        duration: result.duration,
-        multiplier: result.multiplier,
-        hit: result.hit,
-        best: result.best,
-        tireId: this.profile.equippedTire,
-        ballId: result.ballId,
-        combo,
-        others,
-        gift,
-      })
-      this.onRoll?.(result)
-      this.quest('launch', 1, now)
-      if (result.hit === 'perfect' || result.hit === 'great') this.quest('great', 1, now)
-      if (result.hit === 'perfect') this.quest('perfect', 1, now)
-      this.quest('combo', combo, now)
-      this.quest('meters', result.distance, now)
-      this.quest('far', result.distance, now)
-      // The HUD holds the new Wins back until the tire stops; the profile can go now.
-      this.dirty = true
-      this.tutorial('roll')
-      this.badge('firstRoll')
-      if (result.broken > 0) this.badge('firstWall')
-      if (result.distance >= 1000) this.badge('kilometer')
-      if (this.profile.stats.bestZone >= SPACE_ZONE) this.badge('space')
-      if (this.profile.stats.bestZone >= ZONES.length - 1) this.badge('cosmic')
-    },
-
-    buyTire({ id }) {
-      if (!this.atCounter()) return
-      const result = buyTire(this.profile, id)
-      if (!result.ok) return
-      this.dirty = true
-      if (result.bought) this.tutorial('buyTire')
-    },
-
-    equipTire({ id }) {
-      const result = equipTire(this.profile, id)
-      if (result.ok) this.dirty = true
-    },
-
-    /** Buys (in order) or equips an enchantment; the Enchant Altar's panel sends it from anywhere. */
-    buyBall({ id }) {
-      const result = buyBall(this.profile, String(id))
-      if (!result.ok) return
-      this.dirty = true
-      if (result.bought) this.tutorial('buyBall')
-    },
-
-    equipBall({ id }) {
-      const result = equipBall(this.profile, String(id))
-      if (result.ok) this.dirty = true
-    },
-
-    buyPack({ index }) {
-      const result = buyHealthPack(this.profile, Number(index))
-      if (!result.ok) return
-      this.dirty = true
-      this.emit('pack', { amount: result.amount })
-    },
-
-    hatch({ eggId, count }) {
-      const egg = EGGS[eggId]
-      if (!egg) return
-      const p = this.getPosition()
-      if (eggStandNear(p.x, p.z)?.eggId !== eggId) return
-      const n = count === MULTI_HATCH ? MULTI_HATCH : 1
-      this.reveal(hatchEgg(this.profile, eggId, n))
-    },
-
-    openEggItem({ itemId }) {
-      const item = ITEMS[itemId]
-      if (!item || item.kind !== 'egg') return
-      this.reveal(hatchEgg(this.profile, item.egg, 1, { paid: 'item' }))
-    },
-
-    equipPet({ uid }) {
-      if (equipPet(this.profile, Number(uid)).ok) this.dirty = true
-    },
-
-    unequipPet({ uid }) {
-      unequipPet(this.profile, Number(uid))
-      this.dirty = true
-    },
-
-    equipBest() {
-      equipBestPets(this.profile)
-      this.dirty = true
-    },
-
-    deletePet({ uid }) {
-      if (deletePet(this.profile, Number(uid)).ok) this.dirty = true
-    },
-
-    claimDaily({ day }, now) {
-      const result = claimDaily(this.profile, Number(day), now)
-      this.afterReward(result)
-    },
-
-    claimPlaytime({ index }, now) {
-      const result = claimPlaytime(this.profile, this.session, Number(index), now)
-      this.afterReward(result)
-    },
-
-    claimFreeReward() {
-      const p = this.getPosition()
-      if (Math.hypot(p.x - FREE_REWARD.x, p.z - FREE_REWARD.z) > FREE_REWARD.radius + 1.5) return
-      const result = claimFreeReward(this.profile, this.session)
-      this.afterReward(result)
-    },
-
-    /** Picks up Dragonfire Peaks' Secret Star: only standing at it, in Dragonfire Peaks, once. */
-    findStar() {
-      const p = this.getPosition()
-      if (Math.hypot(p.x - STAR.x, p.z - STAR.z) > STAR.radius + 1) return
-      if (!claimSecretStar(this.profile)) return
-      this.dirty = true
-      this.emit('star', {})
-      this.badge('secretStar')
-    },
-
-    portal() {
-      const p = this.getPosition()
-      const portal = portalAt(p.x, p.z, 2)
-      if (!portal) return
-      const result = usePortal(this.profile)
-      if (!result.ok) return
-      this.dirty = true
-      if (result.world === 1) this.badge(portal.id)
-      this.emit('world', { world: result.world, first: Boolean(result.first) })
-    },
-
-    claimQuest({ index }, now) {
-      const result = claimQuest(this.profile, Number(index), now)
-      if (!result.ok) return
-      this.dirty = true
-      this.emit('reward', { label: result.label, wins: result.wins, items: result.items })
-    },
-
-    claimQuestBonus(_payload, now) {
-      const result = claimQuestBonus(this.profile, now)
-      if (!result.ok) return
-      this.dirty = true
-      this.emit('reward', { label: result.label, wins: result.wins, items: result.items })
-    },
-
-    usePotion({ itemId }, now) {
-      const result = usePotion(this.profile, itemId, now)
-      if (!result.ok) return
-      this.dirty = true
-    },
-
-    /** Buys a SHOP item with Wins. */
-    purchase({ productId }) {
-      const item = SHOP[productId]
-      if (!item) return
-      // Checked before the host takes stock, so a short wallet never uses up a Sphinx.
-      if (this.profile.wins < item.price) return
-      if (item.kind === 'pass' && this.profile.passes[productId]) return
-      if (this.onPurchase && !this.onPurchase(productId)) return
-      const result = buyShopItem(this.profile, productId)
-      if (!result.ok) return
-      this.dirty = true
-      this.reveal(result)
-    },
+      case 'buySuit': {
+        // Only at the suit shop (it's on Earth).
+        if (!this.at('suits')) return this.deny('Visit the Suit Shop on Earth')
+        const result = buySuit(profile, String(data.id || ''))
+        if (!result.ok) return this.deny(result.error)
+        this.advanceGuide(0)
+        this.sendProfile()
+        return
+      }
+      case 'buyTank': {
+        // At any Oxygen Store.
+        if (!this.at('o2')) return this.deny('Visit an Oxygen Store')
+        const result = buyTank(profile, String(data.id || ''))
+        if (!result.ok) return this.deny(result.error)
+        this.emit('oxygen', { refilled: true, tank: result.id })
+        this.sendProfile()
+        return
+      }
+      case 'refillOxygen': {
+        if (!this.at('o2')) return this.deny('Visit an Oxygen Store')
+        const result = refillOxygen(profile, profile.location)
+        if (!result.ok) return this.deny(result.error)
+        this.emit('oxygen', { refilled: true, cost: result.cost })
+        this.sendProfile()
+        return
+      }
+      case 'buyProduct': {
+        const result = buyProduct(profile, String(data.id || ''))
+        if (!result.ok) return this.deny(result.error)
+        this.emit('reward', { label: result.name })
+        this.sendProfile()
+        return
+      }
+      case 'skipGuide':
+        if (profile.guide < GUIDE_STEPS.length) {
+          profile.guide = GUIDE_STEPS.length
+          this.sendProfile()
+        }
+        return
+      case 'equipSuit': {
+        if (equipSuit(profile, String(data.id || '')).ok) this.sendProfile()
+        return
+      }
+      default:
+    }
   }
 
-  // --- Granted by the host, never by a client message --------------------------------
+  /** At a Cargo Pad: deliver the package if it's for here, then take the next one. */
+  cargo() {
+    if (!this.at('cargo')) return
+    const profile = this.profile
+    const place = profile.location
+    if (profile.package) {
+      if (profile.package.to !== place) return
+      const delivered = deliverPackage(profile, place)
+      if (!delivered.ok) return
+      this.emit('delivered', delivered)
+      if (place === 'moon') this.advanceGuide(4)
+    }
+    const picked = pickUpPackage(profile, place, this.rand)
+    if (picked.ok) {
+      this.emit('picked', picked.package)
+      if (place === EARTH) this.advanceGuide(1)
+    }
+    this.checkBadges()
+    this.sendProfile()
+  }
 
   /**
-   * A rewarded ad the host has verified with Boxity (or, offline, that Boxity reported
-   * watched). Not a handler: a client can't ask for it directly.
+   * Sets off for `to` by `via`, if that's a trip you can make from where you're
+   * standing: a shuttle bay or the beacon for a shuttle, the re-entry pod down to Earth,
+   * or a Star Map warp to anywhere you've been. (The rocket isn't asked for: it leaves
+   * on its schedule, with whoever's aboard - see tick.)
    */
+  travel(to, via, now) {
+    if (this.trip) return
+    const profile = this.profile
+    const from = profile.location
+    if (to === from) return
+    if (!canBeAt(profile, to)) return this.deny('Unlock it on the Star Map first')
+    let ok = false
+    if (via === 'warp') {
+      // No warping: every trip is flown - the rocket, the shuttles, the pod.
+      return this.deny('No warping - fly there by rocket and shuttle')
+    } else if (via === 'shuttle') {
+      if (from === STATION && destinationById(to)) {
+        ok = this.at(`bay:${to}`)
+      } else if (to === STATION && destinationById(from)) {
+        ok = this.at('beacon')
+      }
+    } else if (via === 'pod') {
+      ok = from === STATION && to === EARTH && this.at('pod')
+    }
+    if (ok) this.startTrip(to, via, now)
+  }
+
+  startTrip(to, via, now) {
+    const from = this.profile.location
+    const duration = TRIP_MS[via] ?? TRIP_MS.warp
+    this.trip = { from, to, via, arriveAt: now + duration }
+    this.profile.location = to
+    this.hazard = null
+    // The guide's travel steps: the rocket up, the Moon shuttle, the beacon back, the pod home.
+    if (via === 'rocket') this.advanceGuide(2)
+    else if (via === 'shuttle' && to === 'moon') this.advanceGuide(3)
+    else if (via === 'shuttle' && from === 'moon' && to === STATION) this.advanceGuide(5)
+    else if (via === 'pod') this.advanceGuide(6)
+    // Off somewhere your suit won't survive: say so before you get there.
+    if (!suitSurvives(this.profile.suit, to)) {
+      const need = suitById(destinationById(to).minSuit).name
+      this.emit('suitWarning', { place: to, need })
+    }
+    if (via === 'rocket') this.profile.stats.launches += 1
+    this.onTrip?.(to)
+    this.emit('trip', { from, to, via, duration })
+    this.sendProfile()
+  }
+
+  arrive(now) {
+    const place = this.trip.to
+    this.trip = null
+    const first = visit(this.profile, place)
+    this.onArrive?.(place)
+    this.emit('arrive', { place, first })
+    // A suit too weak for here starts failing: SUIT_FAIL_MS to get out (or change suit).
+    if (!suitSurvives(this.profile.suit, place)) {
+      this.hazard = { failAt: now + SUIT_FAIL_MS }
+      this.emit('suitFailing', { place, need: suitById(destinationById(place).minSuit).name, ms: SUIT_FAIL_MS })
+    }
+    this.checkBadges()
+    this.sendProfile()
+  }
+
+  // --- Boxity grants (verified by the host first) ------------------------------------
+
+  /** Pays a rewarded ad Boxity confirmed. Returns the result (`ok` false when on cooldown). */
   grantAdReward(placement, now) {
     const result = applyAdReward(this.profile, this.session, placement, now)
     if (!result.ok) return result
-    this.dirty = true
-    this.emit('reward', { label: result.label })
+    this.emit('reward', { label: result.label, money: result.money })
     this.sendProfile()
     return result
   }
 
-  /** A Gems purchase Boxity has confirmed (its webhook, recorded by the host). */
+  /** Grants a Gems purchase Boxity confirmed. Returns the result. */
   grantGemProduct(sku) {
     const result = applyGemProduct(this.profile, sku)
     if (!result.ok) return result
-    this.dirty = true
-    this.emit('reward', { label: result.name, wins: result.wins || 0 })
+    this.emit('reward', { label: result.name, money: result.money })
+    this.checkBadges()
     this.sendProfile()
     return result
   }
 
-  afterReward(result) {
-    if (!result?.ok) return
-    this.dirty = true
-    if (result.pets?.length) this.reveal(result)
-  }
+  // --- Time --------------------------------------------------------------------------
 
-  /** Sends newly gained pets to the client's hatch animation. */
-  reveal(result) {
-    if (!result?.ok || !result.pets?.length) return
-    this.dirty = true
-    this.emit('hatch', { eggId: result.eggId ?? null, pets: result.pets })
-    this.quest('hatch', result.pets.length, Date.now())
-    this.tutorial('hatch')
-    this.badge('firstPet')
-  }
-
-  afterRebirth({ gift } = {}) {
-    this.dirty = true
-    this.tutorial('rebirth')
-    if (this.profile.rebirths === 1) this.badge('firstRebirth')
-    // Every 5th rebirth from 15: eggs, waiting in Items.
-    if (gift) this.emit('reward', { label: `REBIRTH ${gift.rebirths} GIFT: ${gift.label} in Items` })
-  }
-
-  // --- Simulation ------------------------------------------------------------------
-
-  /**
-   * Whether the player stands on (or right by) the Sword Counter, where every sword is
-   * bought (in order: logic.js buyTire refuses any but the next).
-   */
-  atCounter() {
-    const p = this.getPosition()
-    return atSwordCounter(p.x, p.z, STAND_SLACK)
-  }
-
-  /** Whether the player is really standing on the pad they claim. */
-  onClaimedPad() {
-    if (this.pad < 0) return false
-    const p = this.getPosition()
-    return onPad(this.pad, p.x, p.z, PAD_SLACK)
-  }
-
-  /** Advances training and the throw's Power ticks. Call at a steady rate (the room's simulation interval). */
+  /** Runs ~10 times a second: playtime, arrivals, and the Earth rocket's launches. */
   tick(dt, now) {
-    if (now < this.rollingUntil) {
-      // Health trickles in all the way along the track.
-      this.rollTimer += dt
-      while (this.rollTimer >= ROLL_TICK) {
-        this.rollTimer -= ROLL_TICK
-        this.gain('roll', -1, applyRollTick(this.profile, now))
-      }
-    } else if (this.pad >= 0 && now >= this.busyUntil && this.onClaimedPad()) {
-      this.trainTimer += dt
-      while (this.trainTimer >= TRAIN_INTERVAL) {
-        this.trainTimer -= TRAIN_INTERVAL
-        this.trainOnce(now)
-      }
-    } else {
-      this.trainTimer = Math.min(this.trainTimer, TRAIN_INTERVAL * 0.5)
+    const profile = this.profile
+    profile.stats.playtime += dt
+    if (this.trip && now >= this.trip.arriveAt) this.arrive(now)
+    this.checkHazard(now)
+
+    // A launch since the last tick: everyone in the boarding ring rides it up.
+    const launch = lastLaunchAt(now)
+    if (launch > this.lastTickAt && !this.trip && profile.location === EARTH && this.at('boarding')) {
+      // No suit, no space: there's nothing to breathe up there.
+      if (profile.suit === 'none') this.deny('Put on a space suit first - a free one waits at the Suit Shop')
+      else this.startTrip(STATION, 'rocket', now)
     }
-    this.profile.stats.playtime += dt
-    // A minute played towards today's quests; and past midnight, a new day: fresh
-    // quests and the next day of the streak.
-    this.minuteTimer += dt
-    if (this.minuteTimer >= 60) {
-      this.minuteTimer -= 60
-      this.quest('minute', 1, now)
-    }
-    this.questSync += dt
-    if (this.questsChanged && this.questSync >= QUEST_SYNC) this.dirty = true
-    const day = dayNumber(now)
-    if (day !== this.day) {
-      this.day = day
-      if (ensureQuests(this.profile, now)) this.dirty = true
-      const streak = applyStreak(this.profile, now)
-      if (streak.changed) {
-        this.session.streak = streak
-        this.dirty = true
-        this.emit('streak', streak)
-      }
-    }
+    this.lastTickAt = now
+    this.breathe(dt, now)
     if (this.dirty) this.sendProfile()
   }
 
-  /** Tells the client about a Health gain from `source` ('pad', 'roll' or 'click'). */
-  gain(source, pad, result) {
-    // At max level gains stop; there's nothing to show.
-    if (result.gain > 0) {
-      this.emit('train', {
-        source,
-        pad,
-        gain: result.gain,
-        health: this.profile.health,
-        level: this.profile.level,
-        leveledUp: result.leveledUp,
-        levels: result.levels,
-        maxed: result.maxed,
-      })
-    }
-    if (this.profile.settings.autoRebirth && isMaxLevel(this.profile)) {
-      const rebirth = applyRebirth(this.profile)
-      if (rebirth.ok) this.afterRebirth(rebirth)
-    }
-  }
-
-  trainOnce(now) {
-    const result = applyTrain(this.profile, this.pad, now)
-    if (!result.ok) {
-      this.pad = -1
+  /**
+   * A failing suit: fine again if you've changed into one that survives here; otherwise,
+   * when time's up, you die - and come round back in the Earth lobby (package and all).
+   */
+  checkHazard(now) {
+    if (!this.hazard || this.trip) return
+    const profile = this.profile
+    if (suitSurvives(profile.suit, profile.location)) {
+      this.hazard = null
+      this.emit('suitOk', {})
       return
     }
-    this.gain('pad', this.pad, result)
-    this.quest('rep', 1, now)
-    this.tutorial('train')
+    if (now < this.hazard.failAt) return
+    this.hazard = null
+    profile.location = EARTH
+    this.emit('died', { reason: 'suit' })
+    this.onArrive?.(EARTH)
+    this.emit('arrive', { place: EARTH, first: false })
+    this.sendProfile()
   }
+
+  /**
+   * Oxygen: full where there's air, running down a second a second everywhere else
+   * (not while flying: the craft has air). Run dry and the rescue shuttle takes you up
+   * to Halo Station. The client counts down between updates; it's told every few
+   * seconds, and at once when something changes.
+   */
+  breathe(dt, now) {
+    const profile = this.profile
+    if (this.trip) return
+    const capacity = oxygenCapacity(profile)
+    // Air on Earth and the station, and in a planet's safe room.
+    if (breathable(profile.location) || this.at('safe')) {
+      if (profile.oxygen < capacity) {
+        profile.oxygen = capacity
+        this.dirty = true
+      }
+      return
+    }
+    const before = profile.oxygen
+    profile.oxygen = Math.max(0, profile.oxygen - dt)
+    if (Math.floor(before / 5) !== Math.floor(profile.oxygen / 5)) this.dirty = true
+    if (profile.oxygen <= 0) {
+      this.emit('oxygen', { empty: true })
+      this.startTrip(STATION, 'rescue', now)
+    }
+  }
+}
+
+/** Where a player arriving at `place` appears. */
+export function arrivalPoint(place) {
+  const { spawn, spawnYaw } = layoutOf(place)
+  return { x: spawn.x, z: spawn.z, yaw: spawnYaw }
 }

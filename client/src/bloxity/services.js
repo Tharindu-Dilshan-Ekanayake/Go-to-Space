@@ -33,7 +33,7 @@ export function isRewardedAvailable() {
 }
 
 /**
- * Shows a rewarded ad for `placement` ('health-potion', 'wins-potion', ...) and, if it
+ * Shows a rewarded ad for `placement` ('cargo-bonus', ...) and, if it
  * was watched to the end, claims the reward.
  *
  * @returns {Promise<{ ok: boolean, status: string, reason?: string }>} `ok` once the
@@ -215,7 +215,7 @@ export function hideScreen() {
 // --- Leaderboards ----------------------------------------------------------------------
 
 /**
- * Opens Boxity's leaderboard overlay on board `id` ('rebirths', 'wins', 'distance',
+ * Opens Boxity's leaderboard overlay on board `id` ('deliveries', 'earned', 'places',
  * 'playtime'). False when the portal can't show it (then show the game's own).
  */
 export function openBoxityLeaderboard(id) {

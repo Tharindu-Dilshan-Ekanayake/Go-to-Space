@@ -41,7 +41,7 @@ function routes(app) {
 
   app.get('/api/health', (_req, res) => {
     // `game` lets a development client tell this server from another project's.
-    res.json({ ok: true, game: '1-sword-throwing', players: activePlayers.size, db: storageKind() })
+    res.json({ ok: true, game: 'go-to-space', players: activePlayers.size, db: storageKind() })
   })
 
   /**

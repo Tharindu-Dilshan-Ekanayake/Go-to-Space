@@ -1,19 +1,18 @@
 import { Room } from '@colyseus/core'
 
 import { AD_REWARDS } from '../../../shared/balance.js'
-import { applyOfflineProgress } from '../../../shared/logic.js'
-import { PlayerSession } from '../../../shared/session.js'
-import { clampToWalkable, isRollReturn, MAX_MOVE_SPEED, SPAWN } from '../../../shared/world.js'
+import { arrivalPoint, PlayerSession } from '../../../shared/session.js'
+import { clampToWalkable, MAX_HEIGHT, MAX_MOVE_SPEED } from '../../../shared/world.js'
 import { resolveIdentity, verifyAdReward } from '../bloxityApi.js'
 import { reportLeaver } from '../bloxityLeaderboards.js'
-import { carryOverGuest, getSphinxStock, loadProfile, saveProfile, takeSphinx } from '../db.js'
+import { carryOverGuest, loadProfile, saveProfile } from '../db.js'
 import { applyGemsForSession } from '../gems.js'
 import { getLeaderboards } from '../leaderboards.js'
-import { activePlayers, broadcastAll, liveRooms } from '../registry.js'
+import { activePlayers, liveRooms } from '../registry.js'
 import { issueSaveTicket } from '../saveTickets.js'
 import { GameState, PlayerState } from './schema.js'
 
-const MAX_CLIENTS = 8
+const MAX_CLIENTS = 16
 const RECONNECT_SECONDS = 20
 const AUTOSAVE_MS = 30_000
 /** State patches to clients, and the training simulation, per second. */
@@ -26,9 +25,8 @@ const DUPLICATE_LOGIN = 4100
 /** Names this server process in save ownership; Legion sets POD_NAME per pod. */
 const POD = process.env.POD_NAME || `local-${process.pid}`
 
-/** What other players may be told someone is doing. */
-/** What a player can be seen doing: 'run' training on a dummy, 'pull' winding up a throw, 'swing' a click slash. */
-const ANIMS = ['idle', 'walk', 'run', 'jump', 'pull', 'swing']
+/** What other players may be told someone is doing ('fly': hovering on a jetpack, 'sit': in a jet's seat). */
+const ANIMS = ['idle', 'walk', 'jump', 'fly', 'sit']
 /** A Boxity emote, replicated through `anim` as 'emote:<its 24-hex id>'. */
 const EMOTE_ANIM = /^emote:[a-f0-9]{24}$/
 /** Least time between two 'gemsCheck's from one player (each is a database query). */
@@ -46,7 +44,7 @@ const cleanName = (name) =>
     .slice(0, 20) || 'Player'
 
 /**
- * One lobby: up to 8 players sharing a world. All game rules run in each player's
+ * One lobby: up to 16 players sharing the solar system (each sees those in the same place). All game rules run in each player's
  * PlayerSession; the room handles networking, position validation, persistence and
  * the small shared state other players render from.
  */
@@ -127,54 +125,32 @@ export class GameRoom extends Room {
       if (from) console.log(`[room] carried ${from} into ${playerId}`)
     }
     const profile = await loadProfile(playerId, name, owner)
-    const offline = applyOfflineProgress(profile, now)
 
     const player = new PlayerState()
-    const spawnX = SPAWN.x + (Math.random() - 0.5) * 6
-    const spawnZ = SPAWN.z + (Math.random() - 0.5) * 4
+    const arrival = arrivalPoint(profile.location)
+    const spawnX = arrival.x + (Math.random() - 0.5) * 6
+    const spawnZ = arrival.z + (Math.random() - 0.5) * 4
     // `uid` lets clients match Boxity chat to players; only a verified id is shown.
-    Object.assign(player, { name, uid: verified ? playerId : '', x: spawnX, y: 0, z: spawnZ, rotY: Math.PI, anim: 'idle' })
+    Object.assign(player, { name, uid: verified ? playerId : '', x: spawnX, y: 0, z: spawnZ, rotY: arrival.yaw, anim: 'idle' })
     this.state.players.set(client.sessionId, player)
 
+    // Leaving on a trip and arriving: their walk is checked from where they land, not
+    // from where they left.
+    const land = (place) => {
+      const member = this.members.get(client.sessionId)
+      if (!member) return
+      const at = arrivalPoint(place)
+      member.lastPos = { x: at.x, z: at.z }
+      member.lastPosAt = Date.now()
+      Object.assign(player, { x: at.x, y: 0, z: at.z, rotY: at.yaw })
+      this.syncPlayer(client.sessionId)
+    }
     const session = new PlayerSession(profile, {
       now,
       emit: (type, payload) => client.send(type, payload),
       getPosition: () => player,
-      // The friends bonus: everyone else here, in the same world as you.
-      getOthers: () => {
-        let others = 0
-        for (const [sid, p] of this.state.players) if (sid !== client.sessionId && (p.world || 0) === (profile.world || 0)) others += 1
-        return others
-      },
-      onPurchase: (productId) => {
-        if (productId !== 'sphinx') return true
-        const ok = takeSphinx()
-        if (ok) broadcastAll('stock', { sphinx: getSphinxStock() })
-        return ok
-      },
-      onRoll: (result) => {
-        // Everyone else watches the sword fly down its own line of the field. Excluded by session id, not by the
-        // client object from the join: after a reconnect that object is stale, and the
-        // roller would get their own roll back as a second tire.
-        const self = this.clients.find((c) => c.sessionId === client.sessionId)
-        this.broadcast(
-          'ghostRoll',
-          {
-            sid: client.sessionId,
-            distance: result.distance,
-            duration: result.duration,
-            blocked: result.blocked,
-            tireId: profile.equippedTire,
-            ballId: result.ballId,
-            // How well it was timed: others see the jump smash and the flight it made.
-            hit: result.hit,
-            world: profile.world,
-            x: player.x,
-            z: player.z,
-          },
-          self ? { except: self } : undefined,
-        )
-      },
+      onTrip: land,
+      onArrive: land,
     })
 
     this.members.set(client.sessionId, { session, playerId, verified, owner, lastPos: { x: spawnX, z: spawnZ }, lastPosAt: now })
@@ -186,10 +162,10 @@ export class GameRoom extends Room {
       const ticket = issueSaveTicket(playerId)
       if (ticket) client.send('saveTicket', ticket)
     }
-    client.send('spawn', { x: spawnX, z: spawnZ })
-    client.send('stock', { sphinx: getSphinxStock() })
+    client.send('spawn', { x: spawnX, z: spawnZ, place: profile.location })
+    // The rocket schedule runs on the server's clock: clients line their countdown up with it.
+    client.send('clock', { now: Date.now() })
     client.send('leaderboards', getLeaderboards())
-    if (offline) client.send('offline', offline)
     this.syncPlayer(client.sessionId)
     this.updateListing()
     // Gems bought while away (or on another pod) land now.
@@ -200,8 +176,7 @@ export class GameRoom extends Room {
   async onDrop(client) {
     const member = this.members.get(client.sessionId)
     if (!member || member.kicked) return
-    // Stop training while away; the seat stays warm for the reconnect.
-    member.session.handle('leavePad', {}, Date.now())
+    // The seat stays warm for the reconnect.
     member.reconnection = this.allowReconnection(client, RECONNECT_SECONDS)
     try {
       await member.reconnection
@@ -219,6 +194,7 @@ export class GameRoom extends Room {
     activePlayers.set(member.playerId, { room: this, client })
     member.session.emit = (type, payload) => client.send(type, payload)
     member.session.sendProfile()
+    client.send('clock', { now: Date.now() })
   }
 
   async onLeave(client) {
@@ -292,30 +268,24 @@ export class GameRoom extends Room {
     const player = this.state.players.get(sessionId)
     if (!member || !player) return
     const p = member.session.profile
-    if (player.health !== p.health) player.health = p.health
-    if (player.wins !== p.wins) player.wins = p.wins
-    if (player.rebirths !== p.rebirths) player.rebirths = p.rebirths
-    if (player.level !== p.level) player.level = p.level
-    if (player.tireId !== p.equippedTire) player.tireId = p.equippedTire
-    if (player.world !== p.world) player.world = p.world
-    const pets = p.equippedPets
-      .map((uid) => p.pets.find((pet) => pet.uid === uid)?.id)
-      .filter(Boolean)
-    if (pets.join() !== [...player.petIds].join()) {
-      player.petIds.clear()
-      for (const id of pets) player.petIds.push(id)
-    }
+    const place = member.session.place
+    if (player.place !== place) player.place = place
+    if (player.suit !== p.suit) player.suit = p.suit
+    if (player.carrying !== Boolean(p.package)) player.carrying = Boolean(p.package)
+    if (player.money !== p.money) player.money = p.money
+    if (player.deliveries !== p.stats.deliveries) player.deliveries = p.stats.deliveries
   }
 
   /**
    * Position reports, ~10 Hz from each client. Accepted if the move is physically
-   * possible since the last accepted one (or is the hop back after a roll);
-   * otherwise the client is snapped back.
+   * possible since the last accepted one; otherwise the client is snapped back. Ignored
+   * mid-trip (the flight is the same for everyone, and the room put them at their
+   * arrival point already).
    */
   handlePosition(client, msg) {
     const member = this.members.get(client.sessionId)
     const player = this.state.players.get(client.sessionId)
-    if (!member || !player || !msg) return
+    if (!member || !player || !msg || member.session.trip) return
     const x = Number(msg.x)
     const y = Number(msg.y)
     const z = Number(msg.z)
@@ -324,15 +294,15 @@ export class GameRoom extends Room {
     const now = Date.now()
     const dt = Math.max(0.05, (now - member.lastPosAt) / 1000)
     const dist = Math.hypot(x - member.lastPos.x, z - member.lastPos.z)
-    if (dist > MAX_MOVE_SPEED * dt + MOVE_SLACK && !isRollReturn(member.lastPos, { x, z })) {
+    if (dist > MAX_MOVE_SPEED * dt + MOVE_SLACK) {
       client.send('correct', { x: member.lastPos.x, y: player.y, z: member.lastPos.z })
       return
     }
-    const clamped = clampToWalkable(x, z)
+    const clamped = clampToWalkable(member.session.profile.location, x, z)
     member.lastPos = clamped
     member.lastPosAt = now
     player.x = clamped.x
-    player.y = Math.max(0, Math.min(y, 6))
+    player.y = Math.max(0, Math.min(y, MAX_HEIGHT))
     player.z = clamped.z
     player.rotY = Number(msg.r) || 0
     player.anim = ANIMS.includes(msg.a) || (typeof msg.a === 'string' && EMOTE_ANIM.test(msg.a)) ? msg.a : 'idle'

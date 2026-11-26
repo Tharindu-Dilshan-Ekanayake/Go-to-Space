@@ -2,10 +2,10 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { useLayoutEffect, useRef } from 'react'
 import { Vector3 } from 'three'
 
-import { useGame } from '../store/game'
+import { useScenePlace } from '../store/game'
 import { useQuality } from '../store/quality'
 import { runtime } from './runtime'
-import { LIGHTS, lightsOf } from './sceneStyle'
+import { LIGHTS, lookOf } from './sceneStyle'
 
 const SUN_DIRECTION = new Vector3(...LIGHTS.sunDirection).normalize()
 /** How far back along SUN_DIRECTION the light sits from the point it shadows. */
@@ -14,22 +14,21 @@ const SUN_DISTANCE = 70
 const SHADOW_EXTENT = 28
 
 /**
- * Game-day light: a cool sky fill with a green bounce off the grass and a bright sun in
- * the north-west (where the sky glows: skyState.sunDirection matches it) - or, in Lava
- * Land, a red-orange glow from below and a hot orange sun (sceneStyle WORLD_LIGHTS).
+ * The light of the place you're in (sceneStyle.lookOf): a hemisphere fill and a sun in
+ * the north-west, where the sky glows (skyState.sunDirection matches it).
  *
  * Only the HIGH preset casts realtime shadows; lower presets use blob shadows instead
  * (see BlobShadows), so the shadow pass costs nothing there.
  *
  * A directional light's shadow only covers a fixed box around its target, so the sun
- * and its target follow the player, and your ball down the field while it flies.
+ * and its target follow the player.
  */
 export function Lighting() {
   const sunRef = useRef(null)
   const scene = useThree((s) => s.scene)
   const shadows = useQuality((s) => s.settings.shadows === 'realtime')
   const mapSize = useQuality((s) => s.settings.shadowMapSize) || 1024
-  const look = lightsOf(useGame((s) => s.profile.world || 0))
+  const look = lookOf(useScenePlace()).light
 
   useLayoutEffect(() => {
     const sun = sunRef.current
@@ -54,7 +53,7 @@ export function Lighting() {
   useFrame(() => {
     const sun = sunRef.current
     if (!sun) return
-    const p = runtime.camera.mode === 'roll' ? runtime.flightFocus ?? runtime.player.position : runtime.player.position
+    const p = runtime.player.position
     // Snap to whole units so the shadow map doesn't shimmer as the target slides.
     sun.target.position.set(Math.round(p.x), Math.round(p.y), Math.round(p.z))
     sun.position.copy(sun.target.position).addScaledVector(SUN_DIRECTION, SUN_DISTANCE)

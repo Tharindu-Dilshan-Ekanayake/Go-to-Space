@@ -1,660 +1,432 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import {
-  AD_REWARDS,
-  BALLS,
-  CLICK_INTERVAL,
-  EGGS,
-  GEM_PRODUCTS,
-  healthForLevel,
-  levelCap,
-  nextRebirthGift,
-  PADS,
-  PETS,
-  rebirthGift,
-  rebirthMultiplier,
-  TIRES,
-  TUTORIAL,
-  WORLD_PORTALS,
-  WORLD_ZONES,
-  WORLDS,
-  ZONES,
-} from '../../shared/balance.js'
-import { formatDistance, formatNumber } from '../../shared/format.js'
+import { DESTINATIONS, GEM_PRODUCTS, LAUNCH_CYCLE_MS, msToLaunch, refillCost, SUIT_FAIL_MS, suitById, tankById, TRIP_MS } from '../../shared/balance.js'
+import { formatNumber } from '../../shared/format.js'
 import {
   applyAdReward,
   applyGemProduct,
-  applyRebirth,
-  applyRoll,
-  baseRollWins,
-  applyTrain,
-  buyBall,
-  buyHealthPack,
-  buyTire,
+  bestReward,
+  buySuit,
+  cargoPlaces,
+  buyProduct,
   createProfile,
   createSession,
-  equipBall,
-  hatchEgg,
-  healthPacks,
-  isPadUnlocked,
-  levelFor,
+  deliverPackage,
   normalizeProfile,
-  padGain,
-  rebirthSkipPrice,
-  rollOutcome,
-  rollReach,
-  skipRebirth,
-  usePortal,
+  pickUpPackage,
+  routeReward,
+  unlockDestination,
 } from '../../shared/logic.js'
 import { PlayerSession } from '../../shared/session.js'
-import { atSwordCounter, padCenterX, padCenterZ, PORTALS, ROLL_ZONE, SPAWN, STAR, SWORD_COUNTER, TIRE_STANDS } from '../../shared/world.js'
+import { BAYS, groundHeightAt, inZone, jetPad, jetSeats, jetsOf, layoutOf, LAUNCH_PAD, OXYGEN_STORES, SAFE_ROOM } from '../../shared/world.js'
 
-const onPad = (i) => ({ x: padCenterX(i), y: 0.5, z: padCenterZ(i) })
-const inRollZone = () => ({ x: 0, y: 0, z: (ROLL_ZONE.minZ + ROLL_ZONE.maxZ) / 2 })
-
-/** A session for a fresh profile, recording every event it emits. */
-function makeSession(pos, profile = createProfile('a', 'A')) {
+/** A session for `profile` standing at `pos` (a mutable { x, z }), recording its events. */
+function sessionAt(profile, pos, now = 1_000) {
   const events = []
-  // No lucky gifts (rand): Wins stay exactly what the rules say.
-  const session = new PlayerSession(profile, { now: 0, rand: () => 0.99, emit: (type, payload) => events.push({ type, payload }), getPosition: () => pos })
-  return { session, profile, events, count: (type) => events.filter((e) => e.type === type).length }
+  const session = new PlayerSession(profile, { now, emit: (type, payload) => events.push({ type, payload }), getPosition: () => pos, rand: () => 0 })
+  return { session, events, types: () => events.map((e) => e.type) }
 }
 
-/** Trains on pad 0 until max level. */
-function maxOut(p) {
-  for (let i = 0; i < 1e5 && p.level < levelCap(p.rebirths); i += 1) applyTrain(p, 0, 0)
+/** Where zone `name` of `place` is. */
+const zone = (place, name) => {
+  const z = layoutOf(place).zones[name]
+  return { x: z.x, z: z.z }
 }
-
-// --- Formatting ------------------------------------------------------------------
 
 test('numbers format like the HUD', () => {
-  assert.deepEqual(
-    [0, 999, 1000, 1234, 7300, 14000, 2.5e6, 9999].map(formatNumber),
-    ['0', '999', '1K', '1.2K', '7.3K', '14K', '2.5M', '9.9K'],
-  )
-  assert.equal(formatDistance(1050.7), '1,050 m')
+  assert.equal(formatNumber(950), '950')
+  assert.equal(formatNumber(1234), '1.2K')
+  assert.equal(formatNumber(2_500_000), '2.5M')
 })
 
-// --- Levels and rebirth ----------------------------------------------------------
-
-test('max level is 15 + 8 per rebirth; each rebirth adds x1 to gains', () => {
-  assert.deepEqual([0, 1, 2, 3].map(levelCap), [15, 23, 31, 39])
-  assert.deepEqual([0, 1, 2, 3].map(rebirthMultiplier), [1, 2, 3, 4])
-})
-
-test('each level needs more Health than the last', () => {
-  assert.equal(healthForLevel(1), 0)
-  for (let level = 2; level <= 60; level += 1) {
-    assert.ok(healthForLevel(level) > healthForLevel(level - 1), `level ${level}`)
+test('destinations get dearer and pay more the further out they are', () => {
+  for (let i = 1; i < DESTINATIONS.length; i += 1) {
+    assert.ok(DESTINATIONS[i].cost > DESTINATIONS[i - 1].cost, DESTINATIONS[i].id)
+    assert.ok(DESTINATIONS[i].reward > DESTINATIONS[i - 1].reward, DESTINATIONS[i].id)
   }
-  assert.equal(levelFor(0, 0), 1)
-  assert.equal(levelFor(healthForLevel(15) - 1, 0), 14)
-  assert.equal(levelFor(1e12, 0), 15, 'never past the cap')
-  assert.equal(levelFor(1e12, 1), 23)
+  assert.equal(DESTINATIONS[0].cost, 0, 'the Moon is open from the start')
 })
 
-test('the first pad gives the tire power per step and stops at max level', () => {
+test('a new player can send packages between Earth and the Moon only', () => {
   const p = createProfile('a', 'A')
-  for (let i = 0; i < 10; i += 1) applyTrain(p, 0, 0)
-  assert.equal(p.health, 10)
-  maxOut(p)
-  assert.equal(p.health, healthForLevel(15))
-  assert.equal(p.level, 15)
-  assert.equal(applyTrain(p, 0, 0).gain, 0, 'no more natural gains at max level')
-  assert.equal(p.health, healthForLevel(15))
+  assert.deepEqual(cargoPlaces(p), ['earth', 'moon'])
+  const picked = pickUpPackage(p, 'earth', () => 0.5)
+  assert.equal(picked.ok, true)
+  assert.deepEqual(p.package, { from: 'earth', to: 'moon', reward: 40 })
+  assert.equal(pickUpPackage(p, 'earth').ok, false, 'one package at a time')
 })
 
-test('locked pads give nothing', () => {
+test('a package pays at its destination only, times your suit', () => {
   const p = createProfile('a', 'A')
-  assert.equal(applyTrain(p, 1, 0).ok, false)
-  assert.equal(p.health, 0)
+  pickUpPackage(p, 'earth', () => 0)
+  assert.equal(deliverPackage(p, 'mars').ok, false)
+  assert.equal(deliverPackage(p, 'moon').money, 40)
+  assert.equal(p.money, 40)
+  assert.equal(p.stats.deliveries, 1)
+  assert.equal(p.package, null)
+
+  p.ownedSuits.push('scout')
+  p.suit = 'scout'
+  pickUpPackage(p, 'moon', () => 0)
+  assert.equal(p.package.to, 'earth')
+  assert.equal(deliverPackage(p, 'earth').money, Math.round(40 * suitById('scout').mult))
 })
 
-test('better tires add power, rebirths multiply it', () => {
+test('a route pays the rate of its further end', () => {
+  assert.equal(routeReward('earth', 'moon'), 40)
+  assert.equal(routeReward('mars', 'moon'), 110)
+  assert.equal(routeReward('titan', 'earth'), 7500)
+})
+
+test('unlocking a destination costs Money and opens new routes', () => {
   const p = createProfile('a', 'A')
-  p.ownedTires.push('mountain')
-  p.equippedTire = 'mountain'
-  applyTrain(p, 0, 0)
-  assert.equal(p.health, TIRES[1].power)
-  p.rebirths = 1
-  p.health = 0
-  p.level = 1
-  applyTrain(p, 0, 0)
-  assert.equal(p.health, TIRES[1].power * 2)
-  applyTrain(p, 1, 0)
-  assert.equal(p.health, TIRES[1].power * 2 + TIRES[1].power * 2 * 2, 'Speed Pad is x2 on top')
+  assert.equal(unlockDestination(p, 'mars').ok, false, 'too poor')
+  p.money = 600
+  assert.equal(unlockDestination(p, 'mars').ok, true)
+  assert.equal(p.money, 100)
+  assert.deepEqual(cargoPlaces(p), ['earth', 'moon', 'mars'])
+  assert.equal(bestReward(p), 110)
+  assert.equal(unlockDestination(p, 'mars').ok, false, 'only once')
 })
 
-test('rebirth needs max level, resets Health, keeps Wins and tires', () => {
+test('suits are bought with Money and put straight on - Solar Gold too, when you can afford it', () => {
   const p = createProfile('a', 'A')
-  assert.equal(applyRebirth(p).ok, false)
-  maxOut(p)
-  p.wins = 50
-  p.ownedTires.push('mountain')
-  assert.equal(applyRebirth(p).ok, true)
-  assert.equal(p.rebirths, 1)
-  assert.equal(p.health, 0)
-  assert.equal(p.level, 1)
-  assert.equal(p.wins, 50)
-  assert.deepEqual(p.ownedTires, ['bicycle', 'mountain'])
+  p.money = 300
+  assert.equal(buySuit(p, 'scout').ok, true)
+  assert.equal(p.suit, 'scout')
+  assert.equal(p.money, 0)
+  assert.equal(buySuit(p, 'solar').ok, false)
 })
 
-test('skipping to a rebirth costs Wins', () => {
+test('nothing is sold for Gems: x2 Money and Solar Gold are bought with Money', () => {
   const p = createProfile('a', 'A')
-  const price = rebirthSkipPrice(p)
-  p.wins = price - 1
-  assert.equal(skipRebirth(p).ok, false)
-  assert.equal(p.rebirths, 0)
-  p.wins = price + 5
-  assert.equal(skipRebirth(p).ok, true)
-  assert.equal(p.rebirths, 1)
-  assert.equal(p.wins, 5)
-  assert.equal(p.health, 0)
-})
-
-// --- Rolling ---------------------------------------------------------------------
-
-test('nothing blocks a kick: it always flies its full reach', () => {
-  for (const health of [0, ZONES[1].wall - 1, ZONES[1].wall, ZONES[20].wall * 3]) {
-    const outcome = rollOutcome(health)
-    assert.equal(outcome.blocked, -1)
-    assert.equal(outcome.distance, rollReach(health))
-  }
-  assert.equal(rollOutcome(ZONES[1].wall - 1).broken, 1, 'past the first stage without its pace Power')
-})
-
-test('Wins grow with distance', () => {
-  let last = -1
-  for (let m = 0; m <= 16000; m += 250) {
-    const wins = baseRollWins(m)
-    assert.ok(wins >= last, `${m} yd pays at least as much as ${m - 250} yd`)
-    last = wins
-  }
-})
-
-test('rolls pay Wins without using Health; a zone prize pays only once', () => {
-  const p = createProfile('a', 'A')
-  p.health = ZONES[1].wall
-  const first = applyRoll(p, 0)
-  assert.equal(p.health, ZONES[1].wall)
-  assert.deepEqual(first.discovered, [1])
-  assert.equal(first.prize, ZONES[1].discover)
-  assert.equal(first.best, true)
-  assert.equal(p.wins, first.wins + first.prize)
-  const second = applyRoll(p, 0)
-  assert.equal(second.prize, 0)
-  assert.deepEqual(second.discovered, [])
-  assert.equal(second.best, false)
-  assert.equal(p.stats.totalWins, first.wins + first.prize + second.wins)
-  assert.equal(p.stats.rolls, 2)
-})
-
-test('the timing meter decides how hard you hit: distance and Wins', () => {
-  const kick = (accuracy) => {
-    const p = createProfile('a', 'A')
-    p.health = ZONES[3].wall
-    p.stats.bestZone = ZONES.length - 1
-    return applyRoll(p, 0, accuracy)
-  }
-  const auto = kick(null)
-  const weak = kick(0.1)
-  const good = kick(0.5)
-  const great = kick(0.8)
-  const perfect = kick(1)
-  assert.equal(auto.hit, null)
-  assert.deepEqual([weak.hit, good.hit, great.hit, perfect.hit], ['weak', 'good', 'great', 'perfect'])
-  // Further the closer to the middle; Auto Kick flies Power's distance exactly.
-  assert.equal(auto.distance, Math.round(rollReach(ZONES[3].wall) * 10) / 10)
-  assert.ok(weak.distance < good.distance && good.distance < great.distance && great.distance < perfect.distance)
-  // Every grade clearly apart from the next: at least a fifth further each step up.
-  assert.ok(good.distance > weak.distance * 1.2 && great.distance > good.distance * 1.2 && perfect.distance > great.distance * 1.15)
-  assert.ok(perfect.distance > auto.distance * 1.35 && weak.distance < auto.distance * 0.65)
-  // Wins: the Power's worth times the grade's bonus, whatever extra yards the grade adds.
-  assert.equal(good.wins, auto.wins)
-  assert.ok(weak.wins < auto.wins && great.wins > auto.wins)
-  assert.ok(Math.abs(perfect.wins - auto.wins * 1.6) <= 1)
-  // Out-of-range accuracy is clamped, not trusted.
-  assert.equal(kick(7).distance, perfect.distance)
-})
-
-test('the very first roll pays for the second tire, as the guide asks', () => {
-  const p = createProfile('a', 'A')
-  const r = applyRoll(p, 0)
-  assert.ok(r.wins >= TIRES[1].cost)
-})
-
-// --- Buying ----------------------------------------------------------------------
-
-test('tires are bought in order with Wins', () => {
-  const p = createProfile('a', 'A')
-  p.wins = 1000
-  assert.equal(buyTire(p, TIRES[3].id).ok, false, 'skipping ahead')
-  assert.equal(buyTire(p, TIRES[1].id).ok, true)
-  assert.equal(p.wins, 1000 - TIRES[1].cost)
-  assert.equal(p.equippedTire, TIRES[1].id)
-  assert.equal(buyTire(p, TIRES[2].id).ok, true)
-  assert.equal(buyTire(p, 'nope').ok, false)
-  p.wins = 0
-  assert.equal(buyTire(p, TIRES[3].id).ok, false, 'not enough Wins')
-})
-
-test('swords are bought at the Sword Counter only, and the one bought is held', () => {
-  const pos = { x: SWORD_COUNTER.x, y: SWORD_COUNTER.height, z: SWORD_COUNTER.z }
-  const { session, profile } = makeSession(pos)
-  profile.wins = 1000
-  // Away from the counter (the open middle of the courtyard): refused.
-  pos.x = 0
-  pos.z = 14
-  session.handle('buyTire', { id: TIRES[1].id }, 0)
-  assert.equal(profile.ownedTires.includes(TIRES[1].id), false, 'not from the middle of the courtyard')
-  // Under the Sword Wall itself, but off the counter's dais: still refused.
-  pos.x = TIRE_STANDS[1].x
-  pos.z = TIRE_STANDS[1].z
-  session.handle('buyTire', { id: TIRES[1].id }, 0)
-  assert.equal(profile.ownedTires.includes(TIRES[1].id), false, 'not from under its niche')
-  // On the counter: bought and held - and still only the next one in order.
-  pos.x = SWORD_COUNTER.x + SWORD_COUNTER.half - 0.2
-  pos.z = SWORD_COUNTER.z
-  session.handle('buyTire', { id: TIRES[3].id }, 0)
-  assert.equal(profile.ownedTires.includes(TIRES[3].id), false, 'skipping ahead')
-  session.handle('buyTire', { id: TIRES[1].id }, 0)
-  assert.equal(profile.ownedTires.includes(TIRES[1].id), true)
-  assert.equal(profile.equippedTire, TIRES[1].id)
-  assert.equal(profile.wins, 1000 - TIRES[1].cost)
-  // The counter is its dais, nowhere else.
-  assert.equal(atSwordCounter(SWORD_COUNTER.x, SWORD_COUNTER.z), true)
-  assert.equal(atSwordCounter(0, 14), false)
-})
-
-test('Health packs follow your level and ignore the cap', () => {
-  const p = createProfile('a', 'A')
-  const early = healthPacks(p)
-  p.health = healthForLevel(10)
-  p.level = levelFor(p.health, 0)
-  const later = healthPacks(p)
-  assert.ok(later[0].amount > early[0].amount)
-  assert.ok(later[2].amount > later[0].amount)
-  p.wins = later[2].price - 1
-  assert.equal(buyHealthPack(p, 2).ok, false)
-  p.wins = later[2].price
-  const before = p.health
-  assert.equal(buyHealthPack(p, 2).ok, true)
-  assert.equal(p.health, before + later[2].amount)
-  assert.equal(p.wins, 0)
-  // Past the cap with packs: Health keeps climbing, the level stops at max.
-  p.health = healthForLevel(15)
-  p.level = 15
-  p.wins = 1e9
-  buyHealthPack(p, 0)
-  assert.ok(p.health > healthForLevel(15))
-  assert.equal(p.level, 15)
-})
-
-// --- Boxity products -------------------------------------------------------------
-
-test('Gems products grant passes, and an owned pass turns into Wins', () => {
-  const p = createProfile('a', 'A')
-  const first = applyGemProduct(p, 'health_x2')
-  assert.equal(first.ok, true)
-  assert.equal(p.passes.healthX2, true)
-  assert.equal(p.wins, 0)
-  const again = applyGemProduct(p, 'health_x2')
-  assert.ok(again.wins >= 10)
-  assert.equal(p.wins, again.wins)
-  assert.equal(p.stats.totalWins, again.wins)
-  applyGemProduct(p, 'auto_roll')
-  assert.equal(p.settings.autoRoll, true)
-  applyGemProduct(p, 'potion_bundle')
-  assert.deepEqual(p.items, { potionHealth: 3, potionWins: 3 })
-  assert.equal(applyGemProduct(p, 'nope').ok, false)
-  for (const sku of Object.keys(GEM_PRODUCTS)) assert.equal(applyGemProduct(createProfile('b', 'B'), sku).ok, true, sku)
+  assert.equal(Object.keys(GEM_PRODUCTS).length, 0)
+  assert.equal(applyGemProduct(p, 'money_x2').ok, false, 'an old Gems sku grants nothing')
+  p.money = 250000
+  assert.equal(buyProduct(p, 'money_x2').ok, true)
+  assert.equal(p.money, 0)
+  assert.equal(p.passes.moneyX2, true)
+  assert.equal(buyProduct(p, 'money_x2').ok, false, 'once is enough')
+  pickUpPackage(p, 'earth', () => 0)
+  assert.equal(deliverPackage(p, 'moon').money, 80, 'x2 Money doubles pay')
+  p.money = suitById('solar').price
+  assert.equal(buySuit(p, 'solar').ok, true)
+  assert.equal(p.suit, 'solar')
 })
 
 test('ad rewards have a cooldown per placement', () => {
   const p = createProfile('a', 'A')
-  const s = createSession(0)
-  const [placement] = Object.keys(AD_REWARDS)
-  const t0 = 1_000_000
-  assert.equal(applyAdReward(p, s, placement, t0).ok, true)
-  assert.equal(p.items.potionHealth, 1)
-  assert.equal(applyAdReward(p, s, placement, t0 + 1000).ok, false)
-  assert.equal(applyAdReward(p, s, placement, t0 + AD_REWARDS[placement].cooldownMs).ok, true)
-  assert.equal(applyAdReward(p, s, 'nope', t0).ok, false)
+  const t = 1_700_000_000_000
+  const s = createSession(t)
+  assert.equal(applyAdReward(p, s, 'cargo-bonus', t).ok, true)
+  assert.equal(applyAdReward(p, s, 'cargo-bonus', t + 1000).ok, false)
+  assert.equal(applyAdReward(p, s, 'cargo-bonus', t + 3 * 60 * 1000).ok, true)
 })
 
-// --- Saves -----------------------------------------------------------------------
-
-test('old or corrupt saves load with defaults filled in', () => {
-  const p = normalizeProfile(
-    { health: 'x', wins: -5, pets: [{ uid: 1, id: 'nope' }], equippedPets: [1], ownedTires: ['nope'], equippedTire: 'nope', stats: { rolls: 3 } },
-    'x',
-    'X',
-  )
-  assert.equal(p.health, 0)
-  assert.equal(p.wins, 0)
-  assert.deepEqual(p.pets, [])
-  assert.deepEqual(p.equippedPets, [])
-  assert.deepEqual(p.ownedTires, ['bicycle'])
-  assert.equal(p.equippedTire, 'bicycle')
-  assert.equal(p.stats.rolls, 3)
-  assert.equal(p.stats.bestDistance, 0)
-  assert.deepEqual(p.settings, { autoRebirth: false, autoRoll: false })
-  assert.deepEqual(normalizeProfile(null, 'y', 'Y'), createProfile('y', 'Y'))
-  assert.equal(normalizeProfile({ health: healthForLevel(5) }, 'z', 'Z').level, 5, 'level recomputed from Health')
+test('old, corrupt or foreign saves load as a fresh profile; bad fields are dropped', () => {
+  assert.equal(normalizeProfile({ wins: 99, rebirths: 4 }, 'a', 'A').money, 0, 'a save from another game version')
+  assert.equal(normalizeProfile('junk', 'a', 'A').location, 'earth')
+  const fresh = createProfile('a', 'A')
+  const raw = { ...fresh, money: -5, location: 'titan', suit: 'eclipse', unlocked: ['moon', 'pluto'], package: { from: 'earth', to: 'moon', reward: 'lots' } }
+  const p = normalizeProfile(raw, 'a', 'A')
+  assert.equal(p.money, 0)
+  assert.equal(p.location, 'earth', 'Titan is locked, so you start back on Earth')
+  assert.equal(p.suit, 'none', 'a suit you do not own')
+  assert.deepEqual(p.unlocked, ['moon'])
+  assert.equal(p.package, null)
 })
 
-test('only brand-new players get the tutorial', () => {
-  assert.equal(normalizeProfile({ rebirths: 0, tutorialStep: 1 }, 'a', 'A').tutorialStep, 1)
-  assert.equal(normalizeProfile({ rebirths: 1, tutorialStep: 1 }, 'b', 'B').tutorialStep, TUTORIAL.length)
+test('the rocket leaves on a fixed schedule', () => {
+  assert.equal(msToLaunch(0), 0)
+  assert.equal(msToLaunch(1000), LAUNCH_CYCLE_MS - 1000)
+  assert.equal(msToLaunch(LAUNCH_CYCLE_MS - 1), 1)
 })
 
-// --- The session -----------------------------------------------------------------
-
-test('training only counts on the pad the player really stands on', () => {
-  const pos = { x: SPAWN.x, y: 0, z: SPAWN.z }
-  const { session, profile } = makeSession(pos)
-  session.handle('enterPad', { pad: 0 }, 0)
-  session.tick(0.1, 0)
-  session.tick(2, 0)
-  assert.equal(profile.health, 0, 'claimed a pad from spawn')
-  Object.assign(pos, onPad(0))
-  session.tick(0.1, 0)
-  session.tick(2, 0)
-  assert.ok(profile.health > 0)
-  session.handle('enterPad', { pad: 1 }, 0)
-  assert.equal(session.pad, 0, 'a locked pad cannot be entered')
+test('the Cargo Pad only works when you really stand on it', () => {
+  const p = createProfile('a', 'A')
+  const pos = { x: 0, z: 30 }
+  const { session, types } = sessionAt(p, pos)
+  session.handle('cargo', {}, 1_000)
+  assert.equal(p.package, null, 'far from the pad')
+  Object.assign(pos, zone('earth', 'cargo'))
+  session.handle('cargo', {}, 1_100)
+  assert.equal(p.package.to, 'moon')
+  assert.ok(types().includes('picked'))
 })
 
-test('the first guide step completes in the cage once Power reaches 12', () => {
-  assert.equal(TUTORIAL[0].event, 'train')
-  const target = TUTORIAL[0].health
-  assert.equal(target, 12)
-  const pos = onPad(0)
-  const { session, profile } = makeSession(pos)
-  session.handle('enterPad', { pad: 0 }, 0)
-  let t = 0
-  while (profile.health < target - 1) session.tick(0.1, (t += 100))
-  assert.equal(profile.tutorialStep, 0)
-  while (profile.health < target) session.tick(0.1, (t += 100))
-  assert.equal(profile.tutorialStep, 1)
+test('stepping on the destination pad delivers and hands you the next package', () => {
+  const p = createProfile('a', 'A')
+  p.location = 'moon'
+  p.package = { from: 'earth', to: 'moon', reward: 40 }
+  const { session, types } = sessionAt(p, zone('moon', 'cargo'))
+  session.handle('cargo', {}, 1_000)
+  assert.equal(p.money, 40)
+  assert.deepEqual(p.package, { from: 'moon', to: 'earth', reward: 40 })
+  assert.deepEqual(types().slice(0, 2), ['delivered', 'picked'])
+  assert.ok(p.badges.includes('firstDelivery'))
 })
 
-test('rolls start only from the roll zone, one at a time', () => {
-  const pos = { x: SPAWN.x, y: 0, z: SPAWN.z }
-  const { session, profile, count } = makeSession(pos)
-  session.handle('roll', {}, 1000)
-  assert.equal(count('roll'), 0, 'not from spawn')
-  Object.assign(pos, inRollZone())
-  session.handle('roll', {}, 1000)
-  assert.equal(count('roll'), 1)
-  session.handle('roll', {}, 1500)
-  assert.equal(count('roll'), 1, 'no second roll while the tire is out')
-  // Health ticks in while the tire rolls.
-  for (let t = 1100; t < 4000; t += 100) session.tick(0.1, t)
-  assert.ok(profile.health >= 2, `got ${profile.health}`)
-  session.handle('roll', {}, 1000 + session.busyUntil)
-  assert.equal(count('roll'), 2, 'rolls again once the cooldown is over')
-  assert.equal(profile.stats.rolls, 2)
+test('whoever stands in the boarding ring at launch rides the rocket to Halo Station', () => {
+  const p = createProfile('a', 'A')
+  p.ownedSuits = ['rookie']
+  p.suit = 'rookie'
+  const pos = zone('earth', 'boarding')
+  const { session, types } = sessionAt(p, pos, LAUNCH_CYCLE_MS - 500)
+  assert.ok(groundHeightAt('earth', pos.x, pos.z) > 1, 'the ring is up on the pad deck')
+  session.tick(0.1, LAUNCH_CYCLE_MS - 100)
+  assert.equal(p.location, 'earth', 'not yet')
+  session.tick(0.1, LAUNCH_CYCLE_MS + 50)
+  assert.equal(p.location, 'station')
+  assert.equal(session.place, 'transit')
+  assert.ok(types().includes('trip'))
+  session.tick(0.1, LAUNCH_CYCLE_MS + 50 + TRIP_MS.rocket)
+  assert.equal(session.place, 'station')
+  assert.ok(p.visited.includes('station'))
+  assert.ok(p.badges.includes('orbit'))
+})
+
+test('missing the ring at launch leaves you on the ground', () => {
+  const p = createProfile('a', 'A')
+  const { session } = sessionAt(p, { x: 0, z: 30 }, LAUNCH_CYCLE_MS - 500)
+  session.tick(0.1, LAUNCH_CYCLE_MS + 50)
+  assert.equal(p.location, 'earth')
+})
+
+test('shuttles leave from their bay, and only to unlocked destinations', () => {
+  const p = createProfile('a', 'A')
+  p.location = 'station'
+  const mars = BAYS.find((b) => b.id === 'mars')
+  const moon = BAYS.find((b) => b.id === 'moon')
+  const pos = { x: mars.x, z: mars.z }
+  const { session, events } = sessionAt(p, pos)
+  session.handle('travel', { to: 'mars', via: 'shuttle' }, 1_000)
+  assert.equal(p.location, 'station', 'Mars is locked')
+  assert.equal(events.at(-1).type, 'denied')
+  session.handle('travel', { to: 'moon', via: 'shuttle' }, 1_100)
+  assert.equal(p.location, 'station', 'standing at the wrong bay')
+  Object.assign(pos, { x: moon.x, z: moon.z })
+  session.handle('travel', { to: 'moon', via: 'shuttle' }, 1_200)
+  assert.equal(p.location, 'moon')
+  session.handle('travel', { to: 'earth', via: 'warp' }, 1_300)
+  assert.equal(p.location, 'moon', 'no new trip mid-flight')
+})
+
+test('the beacon flies you back up, the pod takes you home', () => {
+  const p = createProfile('a', 'A')
+  p.location = 'moon'
+  const pos = zone('moon', 'beacon')
+  const { session } = sessionAt(p, pos)
+  session.handle('travel', { to: 'station', via: 'shuttle' }, 1_000)
+  assert.equal(p.location, 'station')
+  session.tick(0.1, 1_000 + TRIP_MS.shuttle)
+  Object.assign(pos, zone('station', 'pod'))
+  session.handle('travel', { to: 'earth', via: 'pod' }, 9_000)
+  assert.equal(p.location, 'earth')
+})
+
+test('there is no warping: even to a place you have been, every trip is flown', () => {
+  const p = createProfile('a', 'A')
+  const { session, events } = sessionAt(p, { x: 0, z: 30 })
+  session.handle('travel', { to: 'moon', via: 'warp' }, 1_000)
+  assert.equal(p.location, 'earth')
+  assert.equal(events.at(-1).type, 'denied')
+  p.visited.push('moon', 'station')
+  session.handle('travel', { to: 'moon', via: 'warp' }, 1_100)
+  session.handle('travel', { to: 'station', via: 'warp' }, 1_200)
+  assert.equal(p.location, 'earth')
+})
+
+test('suits can only be bought at the Suit Shop', () => {
+  const p = createProfile('a', 'A')
+  p.money = 1000
+  const pos = { x: 0, z: 30 }
+  const { session } = sessionAt(p, pos)
+  session.handle('buySuit', { id: 'scout' }, 1_000)
+  assert.equal(p.suit, 'none')
+  Object.assign(pos, zone('earth', 'suits'))
+  session.handle('buySuit', { id: 'scout' }, 1_100)
+  assert.equal(p.suit, 'scout')
 })
 
 test('ads and Gems are granted by the host only, never by a client message', () => {
-  const { session, profile, count } = makeSession(inRollZone())
-  session.handle('grantAdReward', { placement: 'health-potion' }, 0)
-  session.handle('grantGemProduct', { sku: 'wins_big' }, 0)
-  session.handle('adReward', { placement: 'health-potion' }, 0)
-  assert.equal(profile.wins, 0)
-  assert.deepEqual(profile.items, {})
-  assert.equal(session.grantAdReward('health-potion', 1e6).ok, true)
-  assert.equal(profile.items.potionHealth, 1)
-  assert.equal(session.grantGemProduct('wins_big').ok, true)
-  assert.ok(profile.wins > 0)
-  assert.equal(count('reward'), 2)
-})
-
-// --- Rebirth gifts ---------------------------------------------------------------
-
-/** Straight to max level (training there takes too long this late). */
-function toCap(p) {
-  p.level = levelCap(p.rebirths)
-  p.health = healthForLevel(p.level)
-}
-
-test('every 5th rebirth from 15 gives Volcano eggs', () => {
-  assert.equal(rebirthGift(14), null)
-  assert.equal(rebirthGift(16), null)
-  assert.deepEqual([15, 20, 25, 35, 100].map((r) => rebirthGift(r).amount), [3, 3, 4, 5, 6])
-  assert.equal(nextRebirthGift(0).rebirths, 15)
-  assert.equal(nextRebirthGift(15).rebirths, 20)
-  assert.equal(nextRebirthGift(19).rebirths, 20)
-
   const p = createProfile('a', 'A')
-  p.rebirths = 14
-  toCap(p)
-  const result = applyRebirth(p)
-  assert.equal(result.gift.rebirths, 15)
-  assert.equal(p.items.eggVolcano, 3)
-  toCap(p)
-  assert.equal(applyRebirth(p).gift, null, 'nothing at rebirth 16')
-  assert.equal(p.items.eggVolcano, 3)
+  const { session } = sessionAt(p, { x: 0, z: 30 })
+  session.handle('adReward', { placement: 'cargo-bonus' }, 1_000)
+  session.handle('gemsLocal', { sku: 'money_big' }, 1_000)
+  session.handle('grantGemProduct', { sku: 'money_big' }, 1_000)
+  assert.equal(p.money, 0)
 })
 
-test('a rebirth gift is announced to the player', () => {
-  const { session, profile, events } = makeSession(SPAWN)
-  profile.rebirths = 19
-  toCap(profile)
-  session.handle('rebirth', {}, 0)
-  const reward = events.find((e) => e.type === 'reward')
-  assert.match(reward.payload.label, /REBIRTH 20 GIFT: 3 Volcano Eggs/)
+test('a flood of messages is cut off', () => {
+  const p = createProfile('a', 'A')
+  p.money = 1_000_000
+  const { session } = sessionAt(p, { x: 0, z: 30 })
+  for (let i = 0; i < 100; i += 1) session.handle('unlock', { id: DESTINATIONS[1 + (i % 8)].id }, 5_000)
+  assert.ok(p.unlocked.length <= 21)
 })
 
-// --- World 2 ---------------------------------------------------------------------
+test('zones are where the layout says', () => {
+  assert.ok(inZone('station', 'pod', -40, 28))
+  assert.equal(BAYS.length, DESTINATIONS.length)
+  assert.ok(LAUNCH_PAD.height > 0)
+})
 
-test('World 2 has its own sixty stages at the same gates, paying more', () => {
-  const [w1, w2] = WORLD_ZONES
-  assert.equal(w2.length, w1.length)
-  assert.equal(new Set(w2.map((z) => z.id)).size, w2.length, 'unique ids')
-  assert.ok(w2.every((z) => !w1.some((o) => o.name === z.name)), 'new names')
-  for (let i = 0; i < w1.length; i += 1) {
-    assert.equal(w2[i].start, w1[i].start)
-    assert.equal(w2[i].wall, w1[i].wall)
-    assert.equal(w2[i].discover, w1[i].discover * WORLDS[1].wins)
+test('every parked jet can be boarded: its ring is on open, walkable deck', () => {
+  for (const place of ['earth', 'station', 'moon']) {
+    const layout = layoutOf(place)
+    for (const jet of jetsOf(place)) {
+      const pad = jetPad(jet)
+      const blocked = layout.colliders.some((r) => pad.x > r.minX && pad.x < r.maxX && pad.z > r.minZ && pad.z < r.maxZ)
+      assert.ok(!blocked, `${place} jet ring at ${pad.x},${pad.z} is inside a collider`)
+      const b = layout.bounds
+      assert.ok(pad.x > b.minX && pad.x < b.maxX && pad.z > b.minZ && pad.z < b.maxZ, `${place} jet ring is off the walkable area`)
+      assert.equal(jetSeats(jet).length, jet.kind === 'liner' ? 16 : 2)
+    }
   }
 })
 
-test('the portal opens at enough rebirths and Wins, without spending them, and goes both ways', () => {
-  const p = createProfile('a', 'A')
-  assert.equal(usePortal(p).ok, false)
-  assert.equal(p.world, 0)
-  p.wins = WORLD_PORTALS.world2.wins
-  assert.equal(usePortal(p).ok, false, 'Wins alone are not enough')
-  p.rebirths = WORLD_PORTALS.world2.rebirths
-  p.wins = WORLD_PORTALS.world2.wins - 1
-  assert.equal(usePortal(p).ok, false, 'rebirths alone are not enough')
-  p.wins = WORLD_PORTALS.world2.wins
-  assert.deepEqual(usePortal(p), { ok: true, world: 1, first: true })
-  assert.equal(p.wins, WORLD_PORTALS.world2.wins, 'Wins kept')
-  assert.equal(usePortal(p).world, 0, 'back home')
-  p.wins = 0
-  assert.equal(usePortal(p).world, 1, 'open for good once unlocked')
-  const saved = normalizeProfile(JSON.parse(JSON.stringify(p)), 'a', 'A')
-  assert.equal(saved.world, 1)
-  assert.equal(saved.world2Unlocked, true)
-  assert.equal(normalizeProfile({ ...p, world2Unlocked: false }, 'a', 'A').world, 0, 'no World 2 without the unlock')
+test('oxygen runs down on a planet, refills where there is air, and runs out into a rescue', () => {
+  const profile = createProfile('o2', 'Breather')
+  profile.location = 'moon'
+  const { session, events } = sessionAt(profile, OXYGEN_STORES.surface)
+  const full = tankById('starter').seconds
+  session.tick(10, 2_000)
+  assert.ok(Math.abs(profile.oxygen - (full - 10)) < 1e-6)
+  // Out of air: the rescue shuttle to Halo Station, package kept.
+  profile.package = { from: 'earth', to: 'moon', reward: 40 }
+  session.tick(full, 3_000)
+  assert.equal(session.trip?.via, 'rescue')
+  assert.equal(session.trip?.to, 'station')
+  assert.ok(events.some((e) => e.type === 'oxygen' && e.payload.empty))
+  session.tick(0.1, 3_000 + TRIP_MS.rescue + 1)
+  assert.equal(profile.location, 'station')
+  session.tick(0.1, 3_000 + TRIP_MS.rescue + 2)
+  assert.equal(profile.oxygen, full)
+  assert.ok(profile.package)
 })
 
-test('a roll in World 2 pays its multiplier and its own first-visit prizes', () => {
-  const one = createProfile('a', 'A')
-  const two = createProfile('b', 'B')
-  one.health = two.health = 5000
-  two.world = 1
-  two.world2Unlocked = true
-  const a = applyRoll(one, 0)
-  const b = applyRoll(two, 0)
-  assert.equal(b.distance, a.distance, 'same gates, same distance')
-  assert.ok(Math.abs(b.wins - a.wins * WORLDS[1].wins) <= WORLDS[1].wins, `${b.wins} vs ${a.wins}`)
-  assert.equal(b.prize, a.prize * WORLDS[1].wins)
-  assert.equal(two.stats.bestZone, 0, "World 1's discoveries untouched")
-  assert.ok(two.stats.bestZone2 > 0)
+test('oxygen tanks are bought bigger at an Oxygen Store, and planet refills cost Money', () => {
+  const profile = createProfile('o2b', 'Buyer')
+  profile.location = 'moon'
+  profile.money = 1000
+  const { session } = sessionAt(profile, OXYGEN_STORES.surface)
+  session.handle('buyTank', { id: 'standard' }, 5_000)
+  assert.equal(profile.tank, 'standard')
+  assert.equal(profile.money, 600)
+  assert.equal(profile.oxygen, 150)
+  session.handle('buyTank', { id: 'starter' }, 6_000)
+  assert.equal(profile.tank, 'standard')
+  profile.oxygen = 20
+  session.handle('refillOxygen', {}, 7_000)
+  assert.equal(profile.oxygen, 150)
+  assert.equal(profile.money, 600 - refillCost('moon'))
+  // Away from the store: no sale.
+  const away = sessionAt(profile, { x: 30, y: 0, z: 30 })
+  profile.oxygen = 10
+  away.session.handle('refillOxygen', {}, 8_000)
+  assert.equal(profile.oxygen, 10)
 })
 
-test('stepping into the portal switches world and tells the client', () => {
-  const portal = PORTALS[0]
-  const { session, profile, events } = makeSession({ x: portal.x, y: 0, z: portal.z })
-  session.handle('portal', {}, 0)
-  assert.equal(profile.world, 0, 'not enough Wins yet')
-  profile.wins = WORLD_PORTALS.world2.wins
-  profile.rebirths = WORLD_PORTALS.world2.rebirths
-  session.handle('portal', {}, 0)
-  assert.equal(profile.world, 1)
-  assert.deepEqual(events.find((e) => e.type === 'world').payload, { world: 1, first: true })
-  session.handle('portal', {}, 0)
-  assert.equal(profile.world, 0)
+test('everyone starts without a suit: the Rookie suit is free at the shop, and the rocket needs one', () => {
+  const p = createProfile('ns', 'NoSuit')
+  assert.equal(p.suit, 'none')
+  assert.deepEqual(p.ownedSuits, [])
+  // In the boarding ring at liftoff without a suit: left behind, and told why.
+  const ring = zone('earth', 'boarding')
+  const { session, events } = sessionAt(p, ring, LAUNCH_CYCLE_MS - 50)
+  session.tick(0.1, LAUNCH_CYCLE_MS + 50)
+  assert.equal(session.trip, null)
+  assert.ok(events.some((e) => e.type === 'denied'))
+  // The free suit, at the Suit Shop.
+  const shop = sessionAt(p, zone('earth', 'suits'))
+  shop.session.handle('buySuit', { id: 'rookie' }, 2_000)
+  assert.equal(p.suit, 'rookie')
+  assert.equal(p.money, 0)
+  // Now the rocket takes you.
+  const again = sessionAt(p, ring, 2 * LAUNCH_CYCLE_MS - 50)
+  again.session.tick(0.1, 2 * LAUNCH_CYCLE_MS + 50)
+  assert.equal(again.session.trip?.via, 'rocket')
 })
 
-// --- Palm Beach ------------------------------------------------------------------
-
-test("Palm Beach's treadmills and Beach Egg work there only", () => {
-  const p = createProfile('a', 'A')
-  const surf = PADS.findIndex((pad) => pad.id === 'surf')
-  const tsunami = PADS.findIndex((pad) => pad.id === 'tsunami')
-  p.rebirths = 20
-  p.wins = 1e9
-  assert.equal(isPadUnlocked(p, surf), false, 'not in World 1, whatever your rebirths')
-  assert.equal(hatchEgg(p, 'beach', 1).ok, false)
-  assert.equal(p.wins, 1e9, 'nothing charged for an egg that cannot hatch here')
-  p.world2Unlocked = true
-  p.world = 1
-  assert.equal(isPadUnlocked(p, surf), true)
-  assert.equal(isPadUnlocked(p, tsunami), true)
-  p.rebirths = 9
-  assert.equal(isPadUnlocked(p, surf), false, 'and it still needs its rebirths')
-  assert.equal(isPadUnlocked(p, 0), true, "World 1's treadmills work there too")
-  const res = hatchEgg(p, 'beach', 1)
-  assert.equal(res.ok, true)
-  assert.ok(['seagull', 'dolphin', 'shark', 'kraken'].includes(res.pets[0].id))
-  // Better pets than the Volcano Egg - the next step up - and its rarest is the best of all.
-  const avg = (id) => EGGS[id].pets.reduce((sum, [pet, w]) => sum + PETS[pet].mult * w, 0) / 100
-  assert.ok(avg('beach') > avg('volcano') * 1.3)
-  const eggPets = Object.values(EGGS).flatMap((egg) => egg.pets.map(([pet]) => pet)).filter((pet) => pet !== 'kraken')
-  assert.ok(eggPets.every((pet) => PETS[pet].mult < PETS.kraken.mult))
+test('a planet safe room has air: oxygen refills inside it', () => {
+  const profile = createProfile('safe', 'Safe')
+  profile.location = 'mars'
+  profile.oxygen = 10
+  const { session } = sessionAt(profile, { x: SAFE_ROOM.x, y: 0, z: SAFE_ROOM.z })
+  session.tick(1, 2_000)
+  assert.equal(profile.oxygen, tankById('starter').seconds)
+  // Step outside and it runs down again.
+  const out = sessionAt(profile, { x: 0, y: 0, z: 18 })
+  out.session.tick(5, 3_000)
+  assert.ok(profile.oxygen < tankById('starter').seconds)
 })
 
-test("Palm Beach's Secret Star: found once, there only, for x2 Power everywhere", () => {
-  const atStar = { x: STAR.x, y: 0, z: STAR.z }
-  const { session, profile, count } = makeSession(atStar)
-  session.handle('findStar', {}, 0)
-  assert.equal(count('star'), 0, 'not in World 1')
-  profile.world2Unlocked = true
-  profile.world = 1
-  const before = padGain(profile, 0, 0)
-  session.handle('findStar', {}, 0)
-  assert.equal(count('star'), 1)
-  assert.equal(padGain(profile, 0, 0), before * 2)
-  session.handle('findStar', {}, 0)
-  assert.equal(count('star'), 1, 'once only')
-  profile.world = 0
-  assert.equal(padGain(profile, 0, 0), before * 2, 'and it keeps working back home')
-  assert.equal(normalizeProfile(JSON.parse(JSON.stringify(profile)), 'a', 'A').secretStars.world2, true, 'saved')
-  // Far from it, nothing.
-  const far = makeSession({ x: 0, y: 0, z: 0 })
-  far.profile.world2Unlocked = true
-  far.profile.world = 1
-  far.session.handle('findStar', {}, 0)
-  assert.equal(far.count('star'), 0)
+test('a planet kills a suit too weak for it: back to the Earth lobby, package kept', () => {
+  const profile = createProfile('weak', 'Weak')
+  profile.ownedSuits = ['rookie', 'scout']
+  profile.suit = 'rookie'
+  profile.unlocked = ['moon', 'mars', 'venus']
+  profile.location = 'station'
+  profile.package = { from: 'earth', to: 'venus', reward: 220 }
+  const pos = { ...zone('station', 'bay:venus') }
+  const { session, events } = sessionAt(profile, pos)
+  session.handle('travel', { to: 'venus', via: 'shuttle' }, 1_000)
+  assert.equal(session.trip?.to, 'venus')
+  assert.ok(events.some((e) => e.type === 'suitWarning' && e.payload.need === 'Scout'))
+  session.tick(0.1, 1_000 + TRIP_MS.shuttle + 1)
+  assert.equal(profile.location, 'venus')
+  assert.ok(events.some((e) => e.type === 'suitFailing'))
+  session.tick(0.1, 1_000 + TRIP_MS.shuttle + SUIT_FAIL_MS + 10)
+  assert.equal(profile.location, 'earth')
+  assert.ok(events.some((e) => e.type === 'died'))
+  assert.ok(profile.package, 'the package survives')
 })
 
-// --- Click swings ------------------------------------------------------------------------
-
-test('walking earns no Power; clicking swings do, one every CLICK_INTERVAL at most', () => {
-  const pos = { x: 0, y: 0, z: 40 }
-  const { session, profile, events } = makeSession(pos)
-  // A long walk round the lobby: nothing.
-  let t = 0
-  for (let i = 0; i < 100; i += 1) {
-    pos.x = Math.sin(i / 5) * 10
-    pos.z = 40 - i * 0.5
-    session.tick(0.1, (t += 100))
-  }
-  assert.equal(profile.health, 0)
-  // A click swing pays a gain, tagged 'click', and counts towards the first guide step.
-  session.handle('clickSwing', {}, (t += 1000))
-  assert.ok(profile.health > 0)
-  assert.equal(events.filter((e) => e.type === 'train').at(-1).payload.source, 'click')
-  // An autoclicker's second click straight after pays nothing; one a beat later does.
-  const after = profile.health
-  session.handle('clickSwing', {}, t + 50)
-  assert.equal(profile.health, after)
-  session.handle('clickSwing', {}, t + CLICK_INTERVAL * 1000)
-  assert.ok(profile.health > after)
+test('putting on a good enough suit in time saves you', () => {
+  const profile = createProfile('swap', 'Swap')
+  profile.ownedSuits = ['rookie', 'scout']
+  profile.suit = 'rookie'
+  profile.unlocked = ['moon', 'venus']
+  profile.location = 'station'
+  const { session, events } = sessionAt(profile, { ...zone('station', 'bay:venus') })
+  session.handle('travel', { to: 'venus', via: 'shuttle' }, 1_000)
+  session.tick(0.1, 1_000 + TRIP_MS.shuttle + 1)
+  session.handle('equipSuit', { id: 'scout' }, 1_000 + TRIP_MS.shuttle + 100)
+  session.tick(0.1, 1_000 + TRIP_MS.shuttle + SUIT_FAIL_MS + 10)
+  assert.equal(profile.location, 'venus')
+  assert.ok(events.some((e) => e.type === 'suitOk'))
 })
 
-test('no click swings in a cage (it swings for you) or while a hit is out', () => {
-  const caged = makeSession(onPad(0))
-  caged.session.handle('enterPad', { pad: 0 }, 0)
-  caged.session.handle('clickSwing', {}, 1000)
-  assert.equal(caged.profile.health, 0)
-  const hitter = makeSession(inRollZone())
-  hitter.profile.health = 100
-  hitter.session.handle('roll', { accuracy: 0.9 }, 1000)
-  const before = hitter.profile.health
-  hitter.session.handle('clickSwing', {}, 1500)
-  assert.equal(hitter.profile.health, before)
-})
-
-// --- Enchantments (balls) ----------------------------------------------------------------------------
-
-test('balls are bought one by one, equipped, and saved', () => {
-  const p = createProfile('a', 'A')
-  assert.equal(p.equippedBall, 'plain')
-  assert.deepEqual(p.ownedBalls, ['plain'])
-  p.wins = 1e15
-  // Not out of order.
-  assert.equal(buyBall(p, BALLS[2].id).ok, false)
-  assert.ok(buyBall(p, BALLS[1].id).bought)
-  assert.equal(p.equippedBall, BALLS[1].id)
-  assert.equal(p.wins, 1e15 - BALLS[1].cost)
-  // Back to one you own: equips, costs nothing.
-  const wins = p.wins
-  assert.ok(equipBall(p, 'plain').ok)
-  assert.equal(p.wins, wins)
-  assert.equal(equipBall(p, BALLS[5].id).ok, false)
-  // A save with junk in it keeps only real balls, and an owned one equipped.
-  const n = normalizeProfile({ ownedBalls: ['plain', 'flame', 'nope'], equippedBall: 'nope' }, 'b', 'B')
-  assert.deepEqual(n.ownedBalls, ['plain', 'flame'])
-  assert.equal(n.equippedBall, 'plain')
-  // An old save (no balls at all) starts with the bare blade.
-  assert.deepEqual(normalizeProfile({}, 'c', 'C').ownedBalls, ['plain'])
-})
-
-test('every ball flies further and pays more than the last', () => {
-  for (let i = 1; i < BALLS.length; i += 1) {
-    assert.ok(BALLS[i].reach > BALLS[i - 1].reach, BALLS[i].id)
-    assert.ok(BALLS[i].wins > BALLS[i - 1].wins, BALLS[i].id)
-    assert.ok(BALLS[i].cost > BALLS[i - 1].cost, BALLS[i].id)
-  }
-  const hit = (ball) => {
-    const p = createProfile('a', 'A')
-    p.health = 5000
-    p.ownedBalls.push(ball)
-    p.equippedBall = ball
-    return applyRoll(p, 0, 0.5)
-  }
-  const plain = hit('plain')
-  const flame = hit('flame')
-  assert.equal(flame.ballId, 'flame')
-  assert.ok(Math.abs(flame.distance / plain.distance - BALLS.find((b) => b.id === 'flame').reach) < 0.01)
-  assert.ok(flame.wins > plain.wins)
-})
-
-test('the session buys balls from anywhere and tells the client which ball was hit', () => {
-  const profile = createProfile('a', 'A')
-  profile.wins = 1e6
-  profile.health = 5000
-  const { session, events } = makeSession(inRollZone(), profile)
-  session.handle('buyBall', { id: BALLS[1].id }, 0)
-  assert.equal(profile.equippedBall, BALLS[1].id)
-  session.handle('roll', { accuracy: 0.9 }, 1000)
-  const roll = events.find((e) => e.type === 'roll').payload
-  assert.equal(roll.ballId, BALLS[1].id)
+test('the first-time guide follows the first round trip, step by step', () => {
+  const p = createProfile('new', 'New')
+  assert.equal(p.guide, 0)
+  const pos = { ...zone('earth', 'suits') }
+  const { session } = sessionAt(p, pos, LAUNCH_CYCLE_MS - 50)
+  session.handle('buySuit', { id: 'rookie' }, LAUNCH_CYCLE_MS - 40)
+  assert.equal(p.guide, 1)
+  Object.assign(pos, zone('earth', 'cargo'))
+  session.handle('cargo', {}, LAUNCH_CYCLE_MS - 30)
+  assert.equal(p.guide, 2)
+  Object.assign(pos, zone('earth', 'boarding'))
+  session.tick(0.1, LAUNCH_CYCLE_MS + 10)
+  assert.equal(p.guide, 3)
+  let t = LAUNCH_CYCLE_MS + TRIP_MS.rocket + 20
+  session.tick(0.1, t)
+  Object.assign(pos, zone('station', 'bay:moon'))
+  session.handle('travel', { to: 'moon', via: 'shuttle' }, t + 1)
+  assert.equal(p.guide, 4)
+  t += TRIP_MS.shuttle + 10
+  session.tick(0.1, t)
+  Object.assign(pos, zone('moon', 'cargo'))
+  session.handle('cargo', {}, t + 1)
+  assert.equal(p.guide, 5)
+  Object.assign(pos, zone('moon', 'beacon'))
+  session.handle('travel', { to: 'station', via: 'shuttle' }, t + 2)
+  assert.equal(p.guide, 6)
+  t += TRIP_MS.shuttle + 10
+  session.tick(0.1, t)
+  Object.assign(pos, zone('station', 'pod'))
+  session.handle('travel', { to: 'earth', via: 'pod' }, t + 1)
+  assert.equal(p.guide, 7)
 })

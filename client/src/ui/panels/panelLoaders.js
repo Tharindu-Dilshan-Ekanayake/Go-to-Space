@@ -4,15 +4,10 @@
  * game is up (prefetchPanels), so opening a panel still never waits.
  */
 export const PANEL_LOADERS = {
-  pets: () => import('./PetsPanel'),
-  rebirth: () => import('./RebirthPanel'),
-  daily: () => import('./DailyRewardsPanel'),
-  quests: () => import('./QuestsPanel'),
-  items: () => import('./ItemsPanel'),
-  offline: () => import('./WelcomeBackPanel'),
+  map: () => import('./MapPanel'),
+  suits: () => import('./SuitsPanel'),
+  oxygen: () => import('./OxygenPanel'),
   store: () => import('./StorePanel'),
-  balls: () => import('./BallsPanel'),
-  swords: () => import('./SwordsPanel'),
   leaderboards: () => import('./LeaderboardsPanel'),
   settings: () => import('./SettingsPanel'),
 }

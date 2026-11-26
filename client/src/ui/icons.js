@@ -7,15 +7,10 @@
  * be inlined side by side without clashing.
  */
 
-import rebirthImage from '../assets/rebirth.webp'
-
 const OUT = '#1b1b1f'
 
-/** Icons that are artwork rather than drawn SVG, by name. */
-const IMAGE_ICONS = {
-  // The game's own rebirth art: pink and ice-blue chasing arrows (150 px, 5 KB).
-  rebirth: rebirthImage,
-}
+/** Icons that are artwork rather than drawn SVG, by name (none at the moment). */
+const IMAGE_ICONS = {}
 
 const svg = (body, defs = '') =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs>${defs}</defs>${body}</svg>`
@@ -310,6 +305,16 @@ const quest = svg(
 )
 
 /** A streak flame: orange outside, gold within. */
+/** The Orbit Express rocket: white body, red nose and fins, a blue porthole, a flame. */
+const rocket = svg(
+  `<path d="M38 74l-14 14 4-20zM62 74l14 14-4-20z" fill="#e8452e" stroke="${OUT}" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M44 80h12l-6 14z" fill="#ffb347" stroke="${OUT}" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M50 6c14 12 18 30 16 50l-4 24H38l-4-24C32 36 36 18 50 6z" fill="#f4f6fa" stroke="${OUT}" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M50 6c7 6 11 12 13 20H37c2-8 6-14 13-20z" fill="#e8452e" stroke="${OUT}" stroke-width="5" stroke-linejoin="round"/>
+  <circle cx="50" cy="44" r="8" fill="#7fd4ff" stroke="${OUT}" stroke-width="5"/>
+  <path d="M36 64h28" stroke="#2f6fe0" stroke-width="6"/>`,
+)
+
 const flame = svg(
   `<path d="M50 6c6 18 28 26 28 52 0 18-12 34-28 34S22 76 22 58c0-14 8-20 12-30 2 10 8 14 8 14 0-14 2-26 8-36z" fill="url(#fl-g)" stroke="${OUT}" stroke-width="6" stroke-linejoin="round"/>
   <path d="M50 50c4 8 14 12 14 24 0 9-6 14-14 14s-14-5-14-14c0-8 6-12 8-18 2 5 6 6 6 6 0-5-2-8 0-12z" fill="#ffe56b"/>`,
@@ -331,6 +336,7 @@ const friends = svg(
 export const ICON_SVGS = {
   quest,
   flame,
+  rocket,
   friends,
   sound,
   soundOff,

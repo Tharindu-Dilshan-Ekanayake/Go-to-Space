@@ -12,7 +12,7 @@ import { runtime } from '../runtime'
  * a lone bubble over your character (`placeLocalBubble`), placed by the follow camera.
  */
 
-export const NAMEPLATE_POOL_SIZE = 8
+export const NAMEPLATE_POOL_SIZE = 15
 
 /** Your bubble floats this far above your feet (players are 1.8 tall, tags sit at 2.05). */
 const LOCAL_BUBBLE_HEIGHT = 2.2
@@ -79,8 +79,20 @@ export function placeNameplate(i, text, x, y, alpha = 1, uid = '') {
     slot.el.style.display = 'block'
     slot.shown = true
   }
-  slot.el.style.opacity = String(alpha)
-  slot.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`
+  // Only touch the page when the tag really moved or faded: each write restyles it, and
+  // with a full room that's fifteen of them every frame.
+  const px = Math.round(x)
+  const py = Math.round(y)
+  const a = Math.round(alpha * 20) / 20
+  if (a !== slot.alpha) {
+    slot.alpha = a
+    slot.el.style.opacity = String(a)
+  }
+  if (px !== slot.px || py !== slot.py) {
+    slot.px = px
+    slot.py = py
+    slot.el.style.transform = `translate(${px}px, ${py}px) translate(-50%, -100%)`
+  }
 }
 
 export function hideNameplatesFrom(start) {

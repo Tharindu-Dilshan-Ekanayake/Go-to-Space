@@ -15,7 +15,7 @@
  * BLOXITY_API_URL in the shell that starts the server (never in a file).
  */
 
-const GAME_FALLBACK = '1-sword-throwing'
+const GAME_FALLBACK = 'go-to-space'
 
 /** 'https://x.io/' -> 'https://x.io', so paths can be appended with a single '/'. */
 const trimUrl = (url) => String(url).replace(/\/+$/, '')

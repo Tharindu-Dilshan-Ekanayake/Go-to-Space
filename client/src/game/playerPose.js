@@ -36,6 +36,12 @@ export const pose = {
   stretchR: 1,
   bones: Object.fromEntries(POSED_BONES.map((name) => [name, { swing: 0, sway: 0, twist: 0 }])),
   bat: { mode: 'back', pos: new Vector3(), quat: new Quaternion(), scale: 1 },
+  /**
+   * Where the space suit sits, riding with the upper body: `pack` the oxygen pack's
+   * middle on your back, `head` the helmet's middle; `quat` is the upper body's turn.
+   * Character space, metres.
+   */
+  suit: { pack: new Vector3(), head: new Vector3(), quat: new Quaternion() },
 }
 
 /**
@@ -119,6 +125,27 @@ function airborne(vy) {
   add('ArmL1', lerp(-2.6, -0.5, f), lerp(0.5, 0.35, f) * OUT_L, 0, 1)
   add('ArmR1', lerp(-2.6, -0.5, f), lerp(0.5, 0.35, f) * OUT_R, 0, 1)
 }
+
+/**
+ * Sitting in a seat (a jet's cockpit): thighs level, shins down, leaning back a touch,
+ * hands forward on the controls, breathing. The character's hips stay where they were
+ * (the seat puts its feet SIT_HIP below the cushion).
+ */
+function seated(time) {
+  const breath = Math.sin(time * 1.6)
+  for (const leg of ['LegL', 'LegR']) {
+    add(`${leg}1`, -1.5, 0.06 * (leg === 'LegL' ? OUT_L : OUT_R), 0, 1)
+    add(`${leg}2`, 1.45, 0, 0, 1)
+  }
+  add('Spine1', -0.06 + breath * 0.01, 0, 0, 1)
+  add('ArmL1', -0.75 + breath * 0.02, 0.12 * OUT_L, 0, 1)
+  add('ArmR1', -0.75 - breath * 0.02, 0.12 * OUT_R, 0, 1)
+  add('ArmL2', -0.7, 0, 0, 1)
+  add('ArmR2', -0.7, 0, 0, 1)
+}
+
+/** How high a seated character's hips are above its feet' standing level (metres). */
+export const SIT_HIP = 0.95
 
 /** Arms up and waving, bouncing on the spot: a celebration. */
 function cheering(time, w) {
@@ -458,6 +485,7 @@ function afterThrow(t, great, time, w) {
  */
 function swordOnBack(spineSwing, twist, len) {
   upperBody(spineSwing, twist, _spine)
+  placeSuit()
   // Measured as drawn (scaled), so the tilt keeps the tip clear of the ground.
   const big = clamp01((len * held - 1.5) / 1.1)
   const tilt = 0.62 + 0.45 * big
@@ -470,6 +498,20 @@ function swordOnBack(spineSwing, twist, len) {
   _face.set(0, 0, -1).applyQuaternion(_spine)
   faceTurn(_dir, _face, pose.bat.quat)
 }
+
+/** The suit's pack and helmet, from the upper body's turn (`_spine`, set by the caller). */
+function placeSuit() {
+  const suit = pose.suit
+  suit.quat.copy(_spine)
+  suit.pack.set(0, SUIT_PACK.y - BODY.pivot, SUIT_PACK.z).applyQuaternion(_spine)
+  suit.pack.y += BODY.pivot + pose.lift
+  suit.head.set(0, SUIT_HEAD.y - BODY.pivot, SUIT_HEAD.z).applyQuaternion(_spine)
+  suit.head.y += BODY.pivot + pose.lift
+}
+
+/** The pack's middle and the helmet's, on the standing 1.8 m character. */
+export const SUIT_PACK = { y: 1.22, z: -0.36 }
+export const SUIT_HEAD = { y: 1.6, z: 0.02 }
 
 /**
  * @param {{ time?: number, speed?: number, maxSpeed?: number, grounded?: boolean,
@@ -502,6 +544,11 @@ export function computePose(motion) {
   held = swordScale(swordLen)
   pose.bat.scale = held
 
+  if (motion.sit) {
+    seated(time)
+    swordOnBack(-0.06, 0, swordLen)
+    return pose
+  }
   if (bat === 'ready') {
     throwReady(time, clamp01(coil), clamp01(motion.strain || 0), 1)
     return pose

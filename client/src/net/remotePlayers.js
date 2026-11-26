@@ -14,13 +14,20 @@ export const remotePlayers = new Map()
 
 const MAX_SNAPSHOTS = 24
 
-/** Everyone's synced state, whichever world they're in, so a change of world can redraw them. */
+/** Everyone's synced state, wherever they are, so moving somewhere can redraw them. */
 const latest = new Map()
+
+/** Where we are, as far as seeing others goes: nowhere while flying. */
+const myPlace = () => {
+  const game = getGame()
+  return game.trip ? 'transit' : game.profile.location
+}
 
 export function upsertRemotePlayer(sessionId, state) {
   latest.set(sessionId, state)
-  // Only players in your world are drawn: each world feels like its own place.
-  if ((state.world || 0) !== (getGame().profile.world || 0)) {
+  // Only players in the same place are drawn (and nobody while you or they fly).
+  const place = myPlace()
+  if (state.place !== place || place === 'transit') {
     dropRemotePlayer(sessionId)
     return
   }
@@ -36,31 +43,25 @@ export function upsertRemotePlayer(sessionId, state) {
       yaw: state.rotY,
       speed: 0,
       anim: 'idle',
-      tireId: 'bicycle',
+      suit: 'rookie',
+      carrying: false,
       /** Their avatar's outfit, parsed from `look`; `lookKey` is the raw string. */
       look: null,
       lookKey: '',
-      petIds: [],
-      /** Follow state per equipped pet, grown as needed and reused. */
-      pets: [],
       walkPhase: 0,
-      /** Mid-hit (RemotePlayers: `hitT` seconds in, `hitGrade` how well), or up at bat. */
-      hitting: false,
-      hitT: 0,
-      hitGrade: null,
-      pulling: false,
     }
     // Its own point, following them about (RemotePlayers).
     r.shadow = { position: r.position.clone(), size: 1.1, visible: true }
     runtime.shadowCasters.add(r.shadow)
     remotePlayers.set(sessionId, r)
+    // Fresh arrivals jump straight to where they are.
+    r.snaps.length = 0
   }
   r.name = state.name
   r.uid = state.uid || ''
   r.anim = state.anim
-  r.tireId = state.tireId
-  r.level = state.level
-  r.rebirths = state.rebirths
+  r.suit = state.suit || 'rookie'
+  r.carrying = Boolean(state.carrying)
   if (state.look !== r.lookKey) {
     r.lookKey = state.look
     try {
@@ -69,10 +70,6 @@ export function upsertRemotePlayer(sessionId, state) {
       r.look = null
     }
   }
-  r.petIds = [...state.petIds]
-  while (r.pets.length < r.petIds.length) {
-    r.pets.push({ id: '', position: r.position.clone(), yaw: 0, hop: 0 })
-  }
   const last = r.snaps[r.snaps.length - 1]
   if (!last || last.x !== state.x || last.y !== state.y || last.z !== state.z || last.r !== state.rotY) {
     r.snaps.push({ t: performance.now(), x: state.x, y: state.y, z: state.z, r: state.rotY })
@@ -80,8 +77,8 @@ export function upsertRemotePlayer(sessionId, state) {
   }
 }
 
-/** You changed world: shows the players in the new one, hides the rest. */
-export function refreshRemoteWorlds() {
+/** You moved somewhere (or set off): shows the players there, hides the rest. */
+export function refreshRemotePlaces() {
   for (const [sessionId, state] of latest) upsertRemotePlayer(sessionId, state)
 }
 
@@ -94,13 +91,10 @@ function dropRemotePlayer(sessionId) {
   const r = remotePlayers.get(sessionId)
   if (!r) return
   runtime.shadowCasters.delete(r.shadow)
-  runtime.ghostRolls.delete(sessionId)
   remotePlayers.delete(sessionId)
 }
 
 export function clearRemotePlayers() {
   for (const id of [...remotePlayers.keys()]) removeRemotePlayer(id)
   latest.clear()
-  runtime.remotePets.length = 0
-  runtime.ghostRolls.clear()
 }

@@ -2,11 +2,12 @@ import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import { Color, Euler, Matrix4, Quaternion, Vector3 } from 'three'
 
-import { getGame } from '../store/game'
-import { createSwordMesh, disposeSwordMesh } from './swords'
 import { createBoxInstances, disposeBlocks } from './blocks'
 import { sharedMaterials, STYLE } from './materials'
+import { suitById } from '@shared/balance'
+
 import { computePose } from './playerPose'
+import { createSuitGear } from './suitGear'
 
 /** Classic 5-stud figure scaled to the 1.8-unit player: one stud = S world units. */
 const S = 0.36
@@ -26,6 +27,20 @@ const PARTS = [
 ].map(([x, y, w, h, d, color, joint]) => ({ x: x * S, y: y * S, w: w * S, h: h * S, d: d * S, color: new Color(color), joint }))
 
 const RIGHT_ARM = PARTS.find((part) => part.joint === 'ArmR1')
+const _main = new Color()
+const _legs = new Color()
+
+/** Colours the figure for `suitId`: suit fabric over body, arms and legs, or its own clothes ('none'). */
+function dressFigure(mesh, suitId) {
+  if (suitId === 'none') {
+    PARTS.forEach((part, i) => mesh.setColorAt(i, part.color))
+  } else {
+    _main.set(suitById(suitId).colors.main)
+    _legs.copy(_main).multiplyScalar(0.86)
+    PARTS.forEach((part, i) => mesh.setColorAt(i, i === 0 ? part.color : part.joint?.startsWith('Leg') ? _legs : _main))
+  }
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+}
 
 const _m = new Matrix4()
 const _pivot = new Matrix4()
@@ -39,12 +54,14 @@ const _s = new Vector3()
  * A classic blocky character, shown while the Bloxity avatar downloads (and instead of
  * it if it can't load), so the player is never invisible. Six boxes in one instanced
  * draw call through the shared toy material - no extra shader program. Posed by the
- * same playerPose as the real avatar (its limbs have no elbows or knees), and carrying
- * your sword where the pose puts it.
+ * same playerPose as the real avatar (its limbs have no elbows or knees), and wearing
+ * the space suit `gear()` names.
  *
- * @param {{ motionRef: React.MutableRefObject<object>, handRef?: React.MutableRefObject<object>, onReady?: () => void }} props
+ * @param {{ motionRef: React.MutableRefObject<object>, handRef?: React.MutableRefObject<object>,
+ *   gear?: () => [string, boolean], onReady?: () => void }} props `gear` returns the suit id
+ *   and whether a package is being carried
  */
-export function FallbackAvatar({ motionRef, handRef, onReady }) {
+export function FallbackAvatar({ motionRef, handRef, gear, onReady }) {
   const ref = useRef(null)
   const mesh = useMemo(() => {
     const m = createBoxInstances(PARTS.length, sharedMaterials().toy, STYLE.SMOOTH)
@@ -55,9 +72,10 @@ export function FallbackAvatar({ motionRef, handRef, onReady }) {
   }, [])
 
   useEffect(() => () => disposeBlocks(mesh), [mesh])
-  const bat = useMemo(() => createSwordMesh(), [])
-  useEffect(() => () => disposeSwordMesh(bat), [bat])
-  const batRef = useRef(null)
+  const suit = useMemo(() => createSuitGear(), [])
+  const suitRef = useRef(null)
+  /** The suit the figure is dressed for. */
+  const dressed = useRef('none')
 
   useEffect(() => {
     onReady?.()
@@ -67,20 +85,23 @@ export function FallbackAvatar({ motionRef, handRef, onReady }) {
     const instanced = ref.current
     if (!instanced) return
     const pose = computePose(motionRef.current)
-    const held = batRef.current
-    if (held) {
-      held.visible = pose.bat.mode !== 'none'
-      held.setSword(getGame().profile.equippedTire)
-      held.position.copy(pose.bat.pos)
-      held.quaternion.copy(pose.bat.quat)
-      held.scale.setScalar(pose.bat.scale)
+    const gearGroup = suitRef.current
+    if (gearGroup) {
+      if (gear) {
+        const [suitId, carrying] = gear()
+        gearGroup.userData.update(suitId, carrying, suitId !== 'none')
+        if (dressed.current !== suitId) {
+          dressed.current = suitId
+          dressFigure(instanced, suitId)
+        }
+      } else gearGroup.visible = false
     }
     PARTS.forEach((part, i) => {
       const joint = part.joint ? pose.bones[part.joint] : null
       _pivot.makeTranslation(part.x, part.y + pose.lift, 0)
       _q.setFromEuler(joint ? _e.set(joint.swing, joint.twist, joint.sway) : _e.set(0, 0, 0))
       _rot.makeRotationFromQuaternion(_q)
-      // Arms reaching for the sword's grip: a touch longer or shorter.
+      // Arms reaching for something: a touch longer or shorter.
       const stretch = part.joint === 'ArmL1' ? pose.stretchL : part.joint === 'ArmR1' ? pose.stretchR : 1
       const thin = Math.min(1.15, Math.max(0.5, 1 / Math.sqrt(Math.max(0.3, stretch))))
       const h = part.h * stretch
@@ -104,7 +125,7 @@ export function FallbackAvatar({ motionRef, handRef, onReady }) {
   return (
     <>
       <primitive ref={ref} object={mesh} />
-      <primitive ref={batRef} object={bat} />
+      <primitive ref={suitRef} object={suit} />
     </>
   )
 }

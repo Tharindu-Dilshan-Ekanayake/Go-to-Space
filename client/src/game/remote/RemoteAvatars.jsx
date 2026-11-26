@@ -2,34 +2,31 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Vector3 } from 'three'
 
-import { BATTER_YAW, padAt, PAD_YAWS } from '@shared/world'
-
 import { remotePlayers } from '../../net/remotePlayers'
 import { getQuality } from '../../store/quality'
 import { emoteFromAnim } from '../../bloxity/emotes'
-import { CLICK_POSE_S } from '../clickSwing'
-import { RUN_CADENCE } from '../kick'
 import { BloxityAvatar } from '../PlayerAvatar'
-import { swordLength } from '../swords'
 
 /** How often the set of fully drawn players is reconsidered. */
 const PICK_MS = 500
 /** Top walking speed: full stride amplitude, as for your own character. */
-const MAX_SPEED = 10.875
+const MAX_SPEED = 10
 const _up = new Vector3(0, 1, 0)
 
 /**
- * One other player as their real Bloxity avatar, dressed as they are and carrying the sword
- * they've equipped - posed by the same playerPose as yours, from what the network says
- * they're doing: walking pace, slashing a training dummy, a click slash, jumping, ready on
- * a throw spot. Their throws play here too: the arm whipping over and the celebration,
- * while their sword spins down its own line of the road (roll/SwordFlight).
+ * One other player as their real Bloxity avatar, dressed as they are and in their space
+ * suit (with a crate on it while they carry a package), posed by the same playerPose as
+ * yours from what the network says they're doing: walking pace, jumping, flying on a
+ * jetpack, an emote.
  */
 function RemoteAvatar({ sessionId, look }) {
   const groupRef = useRef(null)
   const lastY = useRef(null)
-  const motionRef = useRef({ time: 0, speed: 0, grounded: true, maxSpeed: MAX_SPEED, vy: 0, stride: 0, swordLen: 1.3 })
-  const batId = useCallback(() => remotePlayers.get(sessionId)?.tireId || 'bicycle', [sessionId])
+  const motionRef = useRef({ time: 0, speed: 0, grounded: true, maxSpeed: MAX_SPEED, vy: 0, stride: 0, swordLen: 1.4 })
+  const gear = useCallback(() => {
+    const r = remotePlayers.get(sessionId)
+    return [r?.suit || 'rookie', Boolean(r?.carrying)]
+  }, [sessionId])
 
   useFrame((_state, rawDelta) => {
     const group = groupRef.current
@@ -39,49 +36,13 @@ function RemoteAvatar({ sessionId, look }) {
     const m = motionRef.current
     m.time += delta
     group.visible = true
-    m.run = 0
-    m.bat = undefined
-    m.cheer = 0
-    m.emote = null
-    m.coil = 0
-    m.strain = 0
-    m.swordLen = swordLength(r.tireId || 'bicycle')
     group.position.copy(r.position)
+    group.quaternion.setFromAxisAngle(_up, r.yaw)
 
-    if (r.hitting || r.pulling) {
-      // On a throw spot: their throw (the arm whipping over, then watching it fly and
-      // celebrating), or ready - winding up now and then: you can't see their button.
-      group.quaternion.setFromAxisAngle(_up, BATTER_YAW)
-      if (r.hitting) {
-        m.bat = 'after'
-        m.swingT = r.hitT
-        m.great = r.hitGrade === 'perfect' || r.hitGrade === 'great'
-      } else {
-        m.bat = 'ready'
-        m.coil = Math.max(0, Math.sin(m.time * 1.3)) ** 2
-      }
-      m.speed = 0
-      m.grounded = true
-      return
-    }
-    const running = r.anim === 'run'
-    if (r.anim === 'swing') {
-      // Click slashing, again and again, the way they face: you can't see their clicks,
-      // only that they're slashing.
-      group.quaternion.setFromAxisAngle(_up, r.yaw)
-      m.bat = 'slash'
-      m.swingT = m.time % (CLICK_POSE_S + 0.08)
-      m.speed = 0
-      m.grounded = true
-      return
-    }
-    group.quaternion.setFromAxisAngle(_up, running ? PAD_YAWS[Math.max(0, padAt(r.position.x, r.position.z, 0.8))] : r.yaw)
-    // At a dummy: a slash every TRAIN_INTERVAL, as yours does.
-    m.run = running ? 1 : 0
-
-    const speed = running ? 0 : r.speed
-    m.speed = speed
-    m.grounded = r.anim !== 'jump'
+    m.speed = r.speed
+    m.sit = r.anim === 'sit'
+    if (m.sit) m.speed = 0
+    m.grounded = r.anim !== 'jump' && r.anim !== 'fly'
     // A Boxity emote they're playing (stood still while it lasts).
     m.emote = emoteFromAnim(r.anim)
     if (m.emote) m.speed = 0
@@ -89,19 +50,19 @@ function RemoteAvatar({ sessionId, look }) {
     const y = r.position.y
     if (lastY.current !== null) m.vy += ((y - lastY.current) / Math.max(delta, 1e-3) - m.vy) * 0.3
     lastY.current = y
-    m.stride += delta * (running ? RUN_CADENCE : 5 + 6 * Math.min(1, speed / MAX_SPEED))
+    m.stride += delta * (5 + 6 * Math.min(1, m.speed / MAX_SPEED))
   })
 
   return (
     <group ref={groupRef}>
-      <BloxityAvatar equipped={look?.equipped} proportions={look?.proportions} motionRef={motionRef} batId={batId} targetHeight={1.8} />
+      <BloxityAvatar equipped={look?.equipped} proportions={look?.proportions} motionRef={motionRef} gear={gear} targetHeight={1.8} />
     </group>
   )
 }
 
 /**
  * The other players nearest the camera, as their real avatars - standing, walking or
- * training: as many as the quality preset allows (`remoteAvatars`), within
+ * jumping: as many as the quality preset allows (`remoteAvatars`), within
  * `remoteAvatarDistance` - on every preset, everyone in the room, near or far. Anyone
  * beyond those limits would be the cheap blocky figure RemotePlayers draws
  * (`r.fullAvatar` tells it who's covered).
